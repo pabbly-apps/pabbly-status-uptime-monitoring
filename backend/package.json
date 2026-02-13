@@ -1,6 +1,6 @@
 {
   "name": "pabbly-status-monitor-backend",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "Backend API for Pabbly Status Monitor application",
   "main": "src/server.js",
   "type": "module",

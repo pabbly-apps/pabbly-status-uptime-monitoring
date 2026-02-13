@@ -3,6 +3,9 @@ import { Agent } from 'undici';
 import { query } from '../config/database.js';
 import { detectAndCreateIncident, autoResolveIncident } from './incidentService.js';
 
+// Require N consecutive failures before marking an API as down
+const FAILURE_THRESHOLD = 2;
+
 /**
  * Create a fresh HTTP agent for each monitoring cycle
  * This prevents stale connection issues with Cloudflare (520/525 errors)
@@ -163,33 +166,31 @@ async function savePingResult(result) {
  */
 async function handleStatusChange(api, currentStatus, statusCode = null) {
   const apiId = api.id;
-  const lastStatus = apiLastStatus.get(apiId);
+  const tracking = apiLastStatus.get(apiId);
 
-  // Update last status
-  apiLastStatus.set(apiId, currentStatus);
+  if (currentStatus === 'success') {
+    // Reset counter on success
+    apiLastStatus.set(apiId, { status: 'success', consecutiveFailures: 0 });
 
-  // If this is the first ping AND API is down, create incident
-  if (!lastStatus && currentStatus !== 'success') {
-    console.log(`🔴 NEW API DOWN: ${api.name} (${api.url})`);
-    await detectAndCreateIncident(api, statusCode);
+    // If was previously down, resolve incident
+    if (tracking && tracking.status !== 'success') {
+      console.log(`🟢 API UP: ${api.name} (${api.url})`);
+      await autoResolveIncident(api, statusCode);
+    }
     return;
   }
 
-  // If this is the first ping but API is up, just track it
-  if (!lastStatus) {
-    return;
-  }
+  // Failure or timeout - increment counter
+  const prevFailures = tracking ? tracking.consecutiveFailures : 0;
+  const newFailures = prevFailures + 1;
+  apiLastStatus.set(apiId, { status: currentStatus, consecutiveFailures: newFailures });
 
-  // Detect UP → DOWN transition (create incident)
-  if (lastStatus === 'success' && currentStatus !== 'success') {
-    console.log(`🔴 API DOWN: ${api.name} (${api.url})`);
+  // Only create incident if threshold reached
+  if (newFailures === FAILURE_THRESHOLD) {
+    console.log(`🔴 API DOWN (${newFailures} consecutive failures): ${api.name} (${api.url})`);
     await detectAndCreateIncident(api, statusCode);
-  }
-
-  // Detect DOWN → UP transition (resolve incident)
-  if (lastStatus !== 'success' && currentStatus === 'success') {
-    console.log(`🟢 API UP: ${api.name} (${api.url})`);
-    await autoResolveIncident(api, statusCode);
+  } else if (newFailures < FAILURE_THRESHOLD) {
+    console.log(`⚠️ API FAILING (${newFailures}/${FAILURE_THRESHOLD}): ${api.name} (${api.url})`);
   }
 }
 
