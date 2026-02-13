@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.2] - 2026-02-13
+
+### Fixed
+
+#### Intermittent "fetch failed" Errors
+
+Fixed random "fetch failed" errors (Status Code: N/A) caused by undici connection pooling issues.
+
+**Files Changed:**
+- `backend/src/services/monitorService.js` - Replaced shared Agent with fresh-per-cycle Agent, added missing timeouts, enhanced error logging
+- `backend/package.json` - Version bump to 1.3.2
+
+**Root Cause:**
+The shared undici Agent with `keepAliveTimeout: 1` (1ms) was too aggressive, causing race conditions. Additionally, critical timeout parameters (`headersTimeout`, `bodyTimeout`) were missing, leading to intermittent connection failures.
+
+**Solution:**
+- Create a fresh Agent per monitoring cycle (destroyed after each cycle)
+- Added `headersTimeout` (30s) and `bodyTimeout` (30s) configuration
+- Reduced `connections` from 10 to 1 with `pipelining: 0` for minimal pooling
+- Enhanced error logging to capture error codes (`ECONNRESET`, `ETIMEDOUT`, etc.) for better debugging
+
+---
+
 ## [1.3.1] - 2025-01-15
 
 ### Fixed

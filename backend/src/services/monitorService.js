@@ -3,14 +3,26 @@ import { Agent } from 'undici';
 import { query } from '../config/database.js';
 import { detectAndCreateIncident, autoResolveIncident } from './incidentService.js';
 
-// Create a custom HTTP agent that disables connection reuse
-// This prevents stale connection issues with Cloudflare (520/525 errors)
-const httpAgent = new Agent({
-  keepAliveTimeout: 1,
-  keepAliveMaxTimeout: 1,
-  connections: 10,
-  pipelining: 1,
-});
+/**
+ * Create a fresh HTTP agent for each monitoring cycle
+ * This prevents stale connection issues with Cloudflare (520/525 errors)
+ * and eliminates intermittent "fetch failed" errors from connection reuse
+ */
+function createMonitoringAgent() {
+  return new Agent({
+    // Minimal connection pooling
+    connections: 1,
+    pipelining: 0,
+
+    // Reasonable keep-alive (not too aggressive)
+    keepAliveTimeout: 1000,      // 1 second
+    keepAliveMaxTimeout: 5000,   // 5 seconds max lifetime
+
+    // Critical timeout parameters
+    headersTimeout: 30000,       // 30s for response headers
+    bodyTimeout: 30000,          // 30s for response body
+  });
+}
 
 // Track last status for each API to detect status changes
 const apiLastStatus = new Map();
@@ -37,8 +49,10 @@ function truncateBody(body, maxLength = 50000) {
 
 /**
  * Ping a single API endpoint
+ * @param {object} api - API object with url, timeout_duration, expected_status_code
+ * @param {Agent} agent - Undici Agent instance for this monitoring cycle
  */
-async function pingAPI(api) {
+async function pingAPI(api, agent) {
   const startTime = Date.now();
 
   try {
@@ -53,7 +67,7 @@ async function pingAPI(api) {
         'Accept': '*/*',
       },
       signal: controller.signal,
-      dispatcher: httpAgent,
+      dispatcher: agent,
     });
 
     clearTimeout(timeout);
@@ -97,12 +111,21 @@ async function pingAPI(api) {
     // Determine if it's a timeout or other error
     const status = error.name === 'AbortError' ? 'timeout' : 'failure';
 
+    // Build detailed error message with error code for debugging
+    let errorMessage = error.message || 'Connection failed';
+    if (error.code) {
+      errorMessage = `${error.code}: ${errorMessage}`;
+    }
+    if (error.cause?.message) {
+      errorMessage = `${errorMessage} (${error.cause.message})`;
+    }
+
     return {
       api_id: api.id,
       status,
       status_code: null,
       response_time: responseTime,
-      error_message: error.message || 'Connection failed',
+      error_message: errorMessage,
       response_body: null,
       response_headers: null,
     };
@@ -174,6 +197,10 @@ async function handleStatusChange(api, currentStatus, statusCode = null) {
  * Monitor all active APIs
  */
 async function monitorAllAPIs() {
+  // Create fresh agent for this monitoring cycle
+  // This prevents stale connection issues and intermittent failures
+  const agent = createMonitoringAgent();
+
   try {
     console.log(`\n⏰ [${new Date().toISOString()}] Running monitoring check...`);
 
@@ -191,8 +218,8 @@ async function monitorAllAPIs() {
 
     console.log(`   Monitoring ${activeAPIs.length} API(s)...`);
 
-    // Ping all APIs in parallel
-    const pingPromises = activeAPIs.map(api => pingAPI(api));
+    // Ping all APIs in parallel using the fresh agent
+    const pingPromises = activeAPIs.map(api => pingAPI(api, agent));
     const results = await Promise.all(pingPromises);
 
     // Save all results and handle incidents
@@ -218,6 +245,9 @@ async function monitorAllAPIs() {
     console.log(`   Monitoring check completed!\n`);
   } catch (error) {
     console.error('❌ Error in monitoring service:', error);
+  } finally {
+    // Clean up - close agent after monitoring cycle
+    agent.close();
   }
 }
 
