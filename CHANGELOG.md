@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.3] - 2026-02-13
+
+### Added
+
+#### Consecutive Failure Threshold
+
+Added a consecutive failure threshold to prevent false downtime alerts from single network blips.
+
+**Files Changed:**
+- `backend/src/services/monitorService.js` - Added `FAILURE_THRESHOLD` constant and rewrote `handleStatusChange()` with consecutive failure counting
+- `backend/package.json` - Version bump to 1.3.3
+
+**How it works:**
+- Requires 2 consecutive failures before marking an API as down and triggering incidents/alerts/webhooks
+- A single network blip (fetch failed, timeout) no longer creates a false alert
+- Counter resets to 0 on any successful ping
+- All ping results are still recorded in `ping_logs` regardless of threshold
+
+**Note:** The failure counter is stored in memory and resets on server restart. Worst case after restart: 2 minutes to detect a truly down service.
+
+---
+
 ## [1.3.2] - 2026-02-13
 
 ### Fixed
