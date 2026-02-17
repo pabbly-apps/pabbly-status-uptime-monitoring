@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.4] - 2026-02-17
+
+### Fixed
+
+#### Timeout Handling & Connection Retry
+
+Optimized timeout handling and added connection retry mechanism to further reduce false downtime alerts.
+
+**Files Changed:**
+- `backend/src/services/monitorService.js` - Relaxed undici timeouts, added `attemptPing()` with retry logic
+- `backend/package.json` - Version bump to 1.3.4
+
+**Changes:**
+
+1. **Timeout optimization:** Increased undici's internal timeouts (`connect`, `headersTimeout`, `bodyTimeout`) to 120s so the per-API `AbortController` (using each API's `timeout_duration` from the dashboard) is the sole timeout authority. Previously, undici's 30s limit could terminate requests before the configured API timeout.
+
+2. **Connection retry mechanism:** Added automatic retry (1 attempt after 1s delay) for connection-level failures (DNS, TCP, TLS). HTTP-level failures (e.g., wrong status code) are not retried. This prevents transient network blips from being reported as downtime.
+
+---
+
 ## [1.3.3] - 2026-02-13
 
 ### Added

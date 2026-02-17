@@ -21,9 +21,11 @@ function createMonitoringAgent() {
     keepAliveTimeout: 1000,      // 1 second
     keepAliveMaxTimeout: 5000,   // 5 seconds max lifetime
 
-    // Critical timeout parameters
-    headersTimeout: 30000,       // 30s for response headers
-    bodyTimeout: 30000,          // 30s for response body
+    // Disable undici's built-in timeouts — let the per-API AbortController
+    // (which uses each API's timeout_duration from the dashboard) control all timeouts
+    connect: { timeout: 120000 },
+    headersTimeout: 120000,
+    bodyTimeout: 120000,
   });
 }
 
@@ -50,16 +52,20 @@ function truncateBody(body, maxLength = 50000) {
   return bodyStr;
 }
 
+// Max retries for connection-level failures (DNS, TCP, TLS timeouts)
+const CONNECTION_RETRY_COUNT = 1;
+const CONNECTION_RETRY_DELAY_MS = 1000;
+
 /**
- * Ping a single API endpoint
+ * Perform a single fetch attempt against an API endpoint
  * @param {object} api - API object with url, timeout_duration, expected_status_code
  * @param {Agent} agent - Undici Agent instance for this monitoring cycle
+ * @returns {{ result: object, isConnectionError: boolean }}
  */
-async function pingAPI(api, agent) {
+async function attemptPing(api, agent) {
   const startTime = Date.now();
 
   try {
-    // Use native fetch (available in Node.js 18+)
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), api.timeout_duration);
 
@@ -83,7 +89,6 @@ async function pingAPI(api, agent) {
     let responseHeaders = null;
 
     if (!isSuccess) {
-      // Capture response body (as text)
       try {
         const bodyText = await response.text();
         responseBody = truncateBody(bodyText);
@@ -92,7 +97,6 @@ async function pingAPI(api, agent) {
         responseBody = `[Error reading response body: ${bodyError.message}]`;
       }
 
-      // Capture response headers
       responseHeaders = {};
       response.headers.forEach((value, key) => {
         responseHeaders[key] = value;
@@ -100,21 +104,21 @@ async function pingAPI(api, agent) {
     }
 
     return {
-      api_id: api.id,
-      status: isSuccess ? 'success' : 'failure',
-      status_code: response.status,
-      response_time: responseTime,
-      error_message: isSuccess ? null : `Unexpected status code: ${response.status} (expected ${api.expected_status_code})`,
-      response_body: responseBody,
-      response_headers: responseHeaders,
+      result: {
+        api_id: api.id,
+        status: isSuccess ? 'success' : 'failure',
+        status_code: response.status,
+        response_time: responseTime,
+        error_message: isSuccess ? null : `Unexpected status code: ${response.status} (expected ${api.expected_status_code})`,
+        response_body: responseBody,
+        response_headers: responseHeaders,
+      },
+      isConnectionError: false,
     };
   } catch (error) {
     const responseTime = Date.now() - startTime;
-
-    // Determine if it's a timeout or other error
     const status = error.name === 'AbortError' ? 'timeout' : 'failure';
 
-    // Build detailed error message with error code for debugging
     let errorMessage = error.message || 'Connection failed';
     if (error.code) {
       errorMessage = `${error.code}: ${errorMessage}`;
@@ -124,15 +128,45 @@ async function pingAPI(api, agent) {
     }
 
     return {
-      api_id: api.id,
-      status,
-      status_code: null,
-      response_time: responseTime,
-      error_message: errorMessage,
-      response_body: null,
-      response_headers: null,
+      result: {
+        api_id: api.id,
+        status,
+        status_code: null,
+        response_time: responseTime,
+        error_message: errorMessage,
+        response_body: null,
+        response_headers: null,
+      },
+      isConnectionError: true,
     };
   }
+}
+
+/**
+ * Ping a single API endpoint with automatic retry on connection-level failures.
+ * Retries once after a 1s delay if the failure is a connection error (no HTTP response).
+ * Does NOT retry HTTP-level failures (e.g., wrong status code).
+ * @param {object} api - API object with url, timeout_duration, expected_status_code
+ * @param {Agent} agent - Undici Agent instance for this monitoring cycle
+ */
+async function pingAPI(api, agent) {
+  const { result, isConnectionError } = await attemptPing(api, agent);
+
+  // If it's a connection-level failure, retry once after a short delay
+  if (isConnectionError) {
+    for (let retry = 1; retry <= CONNECTION_RETRY_COUNT; retry++) {
+      console.log(`   ⚡ Retrying ${api.name} after connection failure (attempt ${retry + 1})...`);
+      await new Promise(resolve => setTimeout(resolve, CONNECTION_RETRY_DELAY_MS));
+      const retryAttempt = await attemptPing(api, agent);
+      if (!retryAttempt.isConnectionError) {
+        return retryAttempt.result;
+      }
+      // If retry also failed with connection error, use the retry's result
+      return retryAttempt.result;
+    }
+  }
+
+  return result;
 }
 
 /**
