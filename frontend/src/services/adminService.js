@@ -143,6 +143,12 @@ export const testWebhook = async () => {
   return response.data;
 };
 
+// Google Chat Webhook
+export const testGoogleChat = async () => {
+  const response = await api.post('/admin/google-chat-test');
+  return response.data;
+};
+
 // Email SMTP Settings
 export const getEmailSettings = async () => {
   const response = await api.get('/admin/email-settings');

@@ -29,6 +29,7 @@ import {
   updateAPIGroup,
   deleteAPIGroup,
   reorderAPIGroups,
+  testGoogleChat,
 } from '../controllers/adminController.js';
 import { authenticateToken } from '../middleware/auth.js';
 import upload from '../config/upload.js';
@@ -83,6 +84,9 @@ router.post('/email-test', testEmailSettings);
 router.get('/webhook-logs', getWebhookLogs);
 router.post('/webhook-test', testWebhook);
 router.post('/test-webhook-endpoint', testWebhookEndpoint);
+
+// Google Chat Webhook
+router.post('/google-chat-test', testGoogleChat);
 
 // Version
 router.get('/version', getVersion);

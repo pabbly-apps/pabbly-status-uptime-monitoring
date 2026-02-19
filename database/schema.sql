@@ -37,6 +37,9 @@ CREATE TABLE IF NOT EXISTS system_settings (
   notifications_enabled BOOLEAN DEFAULT FALSE,
   webhook_url TEXT,
   webhook_enabled BOOLEAN DEFAULT FALSE,
+  google_chat_webhook_url TEXT,
+  google_chat_webhook_enabled BOOLEAN DEFAULT FALSE,
+  admin_timezone VARCHAR(50) DEFAULT 'UTC',
   data_retention_days INTEGER DEFAULT 90,
 
   -- SMTP Email Settings
@@ -54,8 +57,8 @@ CREATE TABLE IF NOT EXISTS system_settings (
 );
 
 -- Insert default settings row
-INSERT INTO system_settings (id, page_title, brand_color, notifications_enabled, webhook_enabled, data_retention_days, smtp_port)
-VALUES (1, 'System Status', '#3b82f6', FALSE, FALSE, 90, 587)
+INSERT INTO system_settings (id, page_title, brand_color, notifications_enabled, webhook_enabled, google_chat_webhook_enabled, admin_timezone, data_retention_days, smtp_port)
+VALUES (1, 'System Status', '#3b82f6', FALSE, FALSE, FALSE, 'UTC', 90, 587)
 ON CONFLICT (id) DO NOTHING;
 
 

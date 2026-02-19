@@ -10,7 +10,7 @@ import Loading from '../components/shared/Loading';
 import { TimezoneProvider } from '../contexts/TimezoneContext';
 import toast from 'react-hot-toast';
 
-function AdminDashboardContent() {
+function AdminDashboardContent({ onTimezoneLoaded }) {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
   const [stats, setStats] = useState(null);
@@ -32,6 +32,9 @@ function AdminDashboardContent() {
       setStats(statsRes.stats);
       setSettings(statsRes.settings);
       setApis(apisRes.apis);
+      if (statsRes.settings?.admin_timezone) {
+        onTimezoneLoaded(statsRes.settings.admin_timezone);
+      }
       setLoading(false);
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
@@ -323,9 +326,11 @@ function AdminDashboardContent() {
 }
 
 export default function AdminDashboard() {
+  const [adminTimezone, setAdminTimezone] = useState(null);
+
   return (
-    <TimezoneProvider>
-      <AdminDashboardContent />
+    <TimezoneProvider initialTimezone={adminTimezone} useLocalStorage={false}>
+      <AdminDashboardContent onTimezoneLoaded={setAdminTimezone} />
     </TimezoneProvider>
   );
 }

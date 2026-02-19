@@ -1,5 +1,6 @@
 import { createTransport } from 'nodemailer';
 import { query } from '../config/database.js';
+import { formatWithTimezone, getAdminTimezone } from '../utils/timezone.js';
 
 /**
  * Get SMTP settings from database
@@ -125,7 +126,8 @@ export async function sendDowntimeAlert(api, incident) {
 
     const recipientEmails = notificationSettings.emails.join(', ');
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-    const startedAt = new Date(incident.started_at).toLocaleString();
+    const timezone = await getAdminTimezone();
+    const startedAt = formatWithTimezone(new Date(incident.started_at), timezone);
 
     // Build status code info
     const statusCode = incident.status_code;
@@ -303,8 +305,9 @@ export async function sendRecoveryNotification(api, incident, downtimeMinutes, c
 
     const recipientEmails = notificationSettings.emails.join(', ');
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-    const startedAt = new Date(incident.started_at).toLocaleString();
-    const resolvedAt = new Date(incident.resolved_at || Date.now()).toLocaleString();
+    const timezone = await getAdminTimezone();
+    const startedAt = formatWithTimezone(new Date(incident.started_at), timezone);
+    const resolvedAt = formatWithTimezone(new Date(incident.resolved_at || Date.now()), timezone);
 
     // Build status code info
     const originalStatusCode = incident.status_code;

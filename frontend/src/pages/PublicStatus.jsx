@@ -84,7 +84,7 @@ function PublicStatusContent() {
 
   // Merge uptime stats with services - must be called before early returns
   const servicesWithUptime = useMemo(() => {
-    if (!statusData) return [];
+    if (!statusData?.services) return [];
     return statusData.services.map((service) => {
       const stats = uptimeStats.find((s) => s.id === service.id) || {};
       return {

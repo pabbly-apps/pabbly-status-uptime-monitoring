@@ -1,4 +1,5 @@
 import pool from '../config/database.js';
+import { formatWithTimezone } from '../utils/timezone.js';
 
 /**
  * Webhook Service
@@ -11,9 +12,10 @@ import pool from '../config/database.js';
  * @param {object} api - API object with id, name, url, etc.
  * @param {object} incident - Incident object with details
  * @param {number|null} currentStatusCode - Current HTTP status code (for api_up events, this is the recovery code like 200)
+ * @param {string} timezone - IANA timezone identifier
  * @returns {object} Webhook payload
  */
-function buildWebhookPayload(eventType, api, incident, currentStatusCode = null) {
+function buildWebhookPayload(eventType, api, incident, currentStatusCode = null, timezone = 'UTC') {
   const status = eventType === 'api_down' ? 'down' : 'up';
 
   // Calculate downtime in minutes if incident is resolved
@@ -34,7 +36,7 @@ function buildWebhookPayload(eventType, api, incident, currentStatusCode = null)
   return {
     event_type: eventType,
     status: status,
-    timestamp: new Date().toISOString(),
+    timestamp: formatWithTimezone(new Date(), timezone),
     api: {
       id: api.id,
       name: api.name,
@@ -48,8 +50,8 @@ function buildWebhookPayload(eventType, api, incident, currentStatusCode = null)
       description: incident.description,
       status: incident.status,
       status_code: statusCodeToSend,
-      started_at: incident.started_at,
-      resolved_at: incident.resolved_at || null,
+      started_at: incident.started_at ? formatWithTimezone(new Date(incident.started_at), timezone) : null,
+      resolved_at: incident.resolved_at ? formatWithTimezone(new Date(incident.resolved_at), timezone) : null,
       ...(downtimeMinutes !== null && { downtime_minutes: downtimeMinutes })
     }
   };
@@ -99,7 +101,7 @@ export async function sendWebhook(eventType, api, incident, currentStatusCode = 
     try {
       // Get webhook settings
       const settingsResult = await pool.query(
-        'SELECT webhook_url, webhook_enabled FROM system_settings WHERE id = 1'
+        'SELECT webhook_url, webhook_enabled, admin_timezone FROM system_settings WHERE id = 1'
       );
 
       if (!settingsResult.rows.length) {
@@ -107,7 +109,8 @@ export async function sendWebhook(eventType, api, incident, currentStatusCode = 
         return;
       }
 
-      const { webhook_url, webhook_enabled } = settingsResult.rows[0];
+      const { webhook_url, webhook_enabled, admin_timezone } = settingsResult.rows[0];
+      const timezone = admin_timezone || 'UTC';
 
       // Check if webhooks are enabled and URL is configured
       if (!webhook_enabled) {
@@ -121,7 +124,7 @@ export async function sendWebhook(eventType, api, incident, currentStatusCode = 
       }
 
       // Build payload
-      const payload = buildWebhookPayload(eventType, api, incident, currentStatusCode);
+      const payload = buildWebhookPayload(eventType, api, incident, currentStatusCode, timezone);
 
       // Send webhook with 10-second timeout
       const controller = new AbortController();
@@ -213,14 +216,15 @@ export async function testWebhook() {
   try {
     // Get webhook settings
     const settingsResult = await pool.query(
-      'SELECT webhook_url, webhook_enabled FROM system_settings WHERE id = 1'
+      'SELECT webhook_url, webhook_enabled, admin_timezone FROM system_settings WHERE id = 1'
     );
 
     if (!settingsResult.rows.length) {
       return { success: false, message: 'System settings not found' };
     }
 
-    const { webhook_url, webhook_enabled } = settingsResult.rows[0];
+    const { webhook_url, webhook_enabled, admin_timezone } = settingsResult.rows[0];
+    const timezone = admin_timezone || 'UTC';
 
     if (!webhook_url || webhook_url.trim() === '') {
       return { success: false, message: 'Webhook URL not configured' };
@@ -232,7 +236,7 @@ export async function testWebhook() {
     const testPayload = {
       event_type: 'test',
       status: 'test',
-      timestamp: now.toISOString(),
+      timestamp: formatWithTimezone(now, timezone),
       api: {
         id: 0,
         name: 'Test API',
@@ -246,8 +250,8 @@ export async function testWebhook() {
         description: 'This is a test webhook from Status Monitor to verify your endpoint is working correctly',
         status: 'test',
         status_code: 500, // Example status code for test
-        started_at: testStartTime.toISOString(),
-        resolved_at: now.toISOString(),
+        started_at: formatWithTimezone(testStartTime, timezone),
+        resolved_at: formatWithTimezone(now, timezone),
         downtime_minutes: 5
       }
     };
