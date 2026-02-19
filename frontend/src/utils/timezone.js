@@ -85,7 +85,16 @@ export const getTimezoneAbbreviation = (timezone, date = new Date()) => {
     });
     const parts = formatter.formatToParts(date);
     const tzPart = parts.find((part) => part.type === 'timeZoneName');
-    return tzPart ? tzPart.value : timezone;
+    const abbr = tzPart ? tzPart.value : timezone;
+
+    // Browser returns offset form (e.g., "GMT+5:30") for some timezones
+    // Show both abbreviation and offset (e.g., "IST (GMT+5:30)")
+    if (abbr.startsWith('GMT+') || abbr.startsWith('GMT-')) {
+      const tz = TIMEZONES.find((t) => t.value === timezone);
+      if (tz) return `${tz.abbr} (${abbr})`;
+    }
+
+    return abbr;
   } catch (error) {
     console.error('Error getting timezone abbreviation:', error);
     // Try to find in our TIMEZONES list

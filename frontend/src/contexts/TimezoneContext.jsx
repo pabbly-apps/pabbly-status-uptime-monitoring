@@ -5,21 +5,35 @@ const TimezoneContext = createContext();
 
 const STORAGE_KEY = 'user-timezone-preference';
 
-export function TimezoneProvider({ children }) {
-  // Initialize timezone from localStorage or auto-detect
+export function TimezoneProvider({ children, initialTimezone, useLocalStorage = true }) {
+  // Initialize timezone from props, localStorage, or auto-detect
   const [selectedTimezone, setSelectedTimezone] = useState(() => {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      return stored;
+    if (initialTimezone) {
+      return initialTimezone;
+    }
+    if (useLocalStorage) {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        return stored;
+      }
     }
     // Auto-detect user's timezone
     return getUserTimezone();
   });
 
-  // Save to localStorage whenever timezone changes
+  // Sync when initialTimezone prop changes (e.g., after async settings load)
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, selectedTimezone);
-  }, [selectedTimezone]);
+    if (initialTimezone) {
+      setSelectedTimezone(initialTimezone);
+    }
+  }, [initialTimezone]);
+
+  // Save to localStorage whenever timezone changes (only if useLocalStorage is true)
+  useEffect(() => {
+    if (useLocalStorage) {
+      localStorage.setItem(STORAGE_KEY, selectedTimezone);
+    }
+  }, [selectedTimezone, useLocalStorage]);
 
   const value = {
     timezone: selectedTimezone,

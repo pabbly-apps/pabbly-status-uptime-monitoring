@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { getProfile, updateProfile, changePassword, getCurrentUser } from '../services/authService';
-import { getSettings, updateSettings, uploadLogo, getEmailSettings, updateEmailSettings, testEmail, testWebhook, getVersion } from '../services/adminService';
+import { getSettings, updateSettings, uploadLogo, getEmailSettings, updateEmailSettings, testEmail, testWebhook, testGoogleChat, getVersion } from '../services/adminService';
+import { getGroupedTimezones, getTimezoneLabel, getTimezoneAbbreviation, findTimezone } from '../utils/timezone';
 import Loading from '../components/shared/Loading';
 import toast from 'react-hot-toast';
 
@@ -14,10 +15,12 @@ export default function Settings() {
   const [saving, setSaving] = useState(false);
   const [testingEmail, setTestingEmail] = useState(false);
   const [testingWebhook, setTestingWebhook] = useState(false);
+  const [testingGoogleChat, setTestingGoogleChat] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [version, setVersion] = useState('');
   const [emailInputValue, setEmailInputValue] = useState('');
   const [emailTags, setEmailTags] = useState([]);
+  const [timezoneSearch, setTimezoneSearch] = useState('');
 
   // Get active tab from URL params, default to 'account'
   const [activeTab, setActiveTab] = useState(searchParams.get('tab') || 'account');
@@ -44,7 +47,10 @@ export default function Settings() {
     notifications_enabled: false,
     webhook_url: '',
     webhook_enabled: false,
+    google_chat_webhook_url: '',
+    google_chat_webhook_enabled: false,
     logo_url: '',
+    admin_timezone: 'UTC',
   });
 
   // Email SMTP Settings
@@ -119,7 +125,10 @@ export default function Settings() {
           notifications_enabled: settingsRes.settings.notifications_enabled || false,
           webhook_url: settingsRes.settings.webhook_url || '',
           webhook_enabled: settingsRes.settings.webhook_enabled || false,
+          google_chat_webhook_url: settingsRes.settings.google_chat_webhook_url || '',
+          google_chat_webhook_enabled: settingsRes.settings.google_chat_webhook_enabled || false,
           logo_url: settingsRes.settings.logo_url || '',
+          admin_timezone: settingsRes.settings.admin_timezone || 'UTC',
         });
 
         // Set logo preview if logo exists
@@ -266,7 +275,7 @@ export default function Settings() {
   };
 
   const handleSystemSubmit = async (e) => {
-    e.preventDefault();
+    if (e && e.preventDefault) e.preventDefault();
     setSaving(true);
 
     try {
@@ -373,6 +382,20 @@ export default function Settings() {
       toast.error(error.response?.data?.message || 'Failed to send test webhook. Please check your webhook URL.');
     } finally {
       setTestingWebhook(false);
+    }
+  };
+
+  const handleTestGoogleChat = async () => {
+    setTestingGoogleChat(true);
+
+    try {
+      const response = await testGoogleChat();
+      toast.success(response.message || 'Test notification sent to Google Chat');
+    } catch (error) {
+      console.error('Test Google Chat error:', error);
+      toast.error(error.response?.data?.message || 'Failed to send test notification. Please check your Google Chat webhook URL.');
+    } finally {
+      setTestingGoogleChat(false);
     }
   };
 
@@ -657,6 +680,16 @@ export default function Settings() {
               Webhook
             </button>
             <button
+              onClick={() => handleTabChange('googlechat')}
+              className={`px-4 sm:px-6 py-3 text-xs sm:text-sm font-medium border-b-2 transition-colors whitespace-nowrap flex-shrink-0 ${
+                activeTab === 'googlechat'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              Google Chat
+            </button>
+            <button
               onClick={() => handleTabChange('email')}
               className={`px-4 sm:px-6 py-3 text-xs sm:text-sm font-medium border-b-2 transition-colors whitespace-nowrap flex-shrink-0 ${
                 activeTab === 'email'
@@ -665,6 +698,16 @@ export default function Settings() {
               }`}
             >
               Email
+            </button>
+            <button
+              onClick={() => handleTabChange('timezone')}
+              className={`px-4 sm:px-6 py-3 text-xs sm:text-sm font-medium border-b-2 transition-colors whitespace-nowrap flex-shrink-0 ${
+                activeTab === 'timezone'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              Timezone
             </button>
           </div>
         </div>
@@ -966,6 +1009,227 @@ export default function Settings() {
                 </button>
               </div>
             </form>
+          </div>
+          )}
+
+          {/* Google Chat Configuration Tab */}
+          {activeTab === 'googlechat' && (
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">
+              Google Chat Webhook
+            </h2>
+
+            <div className="bg-blue-50 border border-blue-200 rounded-md p-4 mb-4">
+              <div className="flex">
+                <div className="flex-shrink-0">
+                  <svg className="h-5 w-5 text-blue-400" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                  </svg>
+                </div>
+                <div className="ml-3 flex-1">
+                  <p className="text-sm text-blue-700">
+                    Send incident notifications directly to a Google Chat space. This works independently of the generic webhook and does not require Pabbly Connect.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <form onSubmit={handleSystemSubmit} className="space-y-4">
+              <div>
+                <label htmlFor="google_chat_webhook_url" className="block text-sm font-medium text-gray-700 mb-1">
+                  Google Chat Webhook URL
+                </label>
+                <input
+                  type="url"
+                  id="google_chat_webhook_url"
+                  name="google_chat_webhook_url"
+                  value={systemSettings.google_chat_webhook_url}
+                  onChange={handleSystemChange}
+                  placeholder="https://chat.googleapis.com/v1/spaces/SPACE_ID/messages?key=KEY&token=TOKEN"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  The incoming webhook URL from your Google Chat space
+                </p>
+              </div>
+
+              <div className="flex items-center">
+                <input
+                  type="checkbox"
+                  id="google_chat_webhook_enabled"
+                  name="google_chat_webhook_enabled"
+                  checked={systemSettings.google_chat_webhook_enabled}
+                  onChange={handleSystemChange}
+                  className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                />
+                <label htmlFor="google_chat_webhook_enabled" className="ml-2 block text-sm text-gray-900">
+                  Enable Google Chat notifications
+                </label>
+              </div>
+
+              {/* How to get the webhook URL */}
+              <div className="mt-4 p-4 bg-gray-50 rounded-md border border-gray-200">
+                <h3 className="text-sm font-semibold text-gray-900 mb-2">How to get your Google Chat Webhook URL</h3>
+                <ol className="text-xs text-gray-600 space-y-1 list-decimal list-inside">
+                  <li>Open Google Chat and go to the space where you want notifications</li>
+                  <li>Click the space name at the top, then select <strong>Apps & integrations</strong></li>
+                  <li>Click <strong>Manage webhooks</strong></li>
+                  <li>Click <strong>Add another</strong> (or create a new webhook)</li>
+                  <li>Give it a name (e.g., "Status Monitor") and optionally set an avatar URL</li>
+                  <li>Copy the webhook URL and paste it above</li>
+                </ol>
+                <p className="text-xs text-gray-500 mt-2">
+                  The URL should look like: <code className="bg-gray-200 px-1 rounded text-xs">https://chat.googleapis.com/v1/spaces/.../messages?key=...&token=...</code>
+                </p>
+              </div>
+
+              <div className="flex flex-col sm:flex-row justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={handleTestGoogleChat}
+                  disabled={testingGoogleChat || saving}
+                  className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+                >
+                  {testingGoogleChat ? 'Sending Test...' : 'Send Test Notification'}
+                </button>
+                <button
+                  type="submit"
+                  disabled={saving || testingGoogleChat}
+                  className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+                >
+                  {saving ? 'Saving...' : 'Update Google Chat Settings'}
+                </button>
+              </div>
+            </form>
+          </div>
+          )}
+
+          {/* Timezone Configuration Tab */}
+          {activeTab === 'timezone' && (
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">
+              Timezone Settings
+            </h2>
+
+            <div className="bg-blue-50 border border-blue-200 rounded-md p-4 mb-6">
+              <div className="flex">
+                <div className="flex-shrink-0">
+                  <svg className="h-5 w-5 text-blue-400" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                  </svg>
+                </div>
+                <div className="ml-3 flex-1">
+                  <p className="text-sm text-blue-700">
+                    Controls timestamps shown on admin pages and in notifications (webhook, Google Chat, email). The public status page is not affected — it uses the visitor's browser timezone.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Current timezone display */}
+            <div className="mb-6 p-4 bg-gray-50 rounded-md border border-gray-200">
+              <div className="flex items-center gap-3">
+                <svg className="w-5 h-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <div>
+                  <p className="text-sm font-medium text-gray-900">
+                    Current: {findTimezone(systemSettings.admin_timezone)?.label || getTimezoneLabel(systemSettings.admin_timezone)} ({getTimezoneAbbreviation(systemSettings.admin_timezone)})
+                  </p>
+                  <p className="text-xs text-gray-500">IANA: {systemSettings.admin_timezone}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Search box */}
+            <div className="mb-4">
+              <div className="relative">
+                <svg className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                <input
+                  type="text"
+                  placeholder="Search timezones..."
+                  value={timezoneSearch}
+                  onChange={(e) => setTimezoneSearch(e.target.value)}
+                  className="w-full pl-10 pr-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+            </div>
+
+            {/* Timezone list grouped by region */}
+            <div className="border border-gray-200 rounded-md overflow-hidden max-h-96 overflow-y-auto mb-6">
+              {Object.entries(getGroupedTimezones()).map(([region, timezones]) => {
+                const filtered = timezoneSearch
+                  ? timezones.filter((tz) =>
+                      tz.label.toLowerCase().includes(timezoneSearch.toLowerCase()) ||
+                      tz.abbr.toLowerCase().includes(timezoneSearch.toLowerCase()) ||
+                      tz.value.toLowerCase().includes(timezoneSearch.toLowerCase())
+                    )
+                  : timezones;
+
+                if (filtered.length === 0) return null;
+
+                return (
+                  <div key={region} className="border-b border-gray-100 last:border-b-0">
+                    <div className="px-3 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider bg-gray-50 sticky top-0">
+                      {region}
+                    </div>
+                    <div>
+                      {filtered.map((tz) => (
+                        <button
+                          key={tz.value}
+                          type="button"
+                          onClick={() => setSystemSettings({ ...systemSettings, admin_timezone: tz.value })}
+                          className={`w-full text-left px-4 py-2.5 text-sm hover:bg-blue-50 flex items-center justify-between ${
+                            systemSettings.admin_timezone === tz.value
+                              ? 'bg-blue-50 text-blue-700'
+                              : 'text-gray-700'
+                          }`}
+                        >
+                          <span className="flex items-center gap-2">
+                            {systemSettings.admin_timezone === tz.value && (
+                              <svg className="w-4 h-4 text-blue-600" fill="currentColor" viewBox="0 0 20 20">
+                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                              </svg>
+                            )}
+                            <span>{tz.label}</span>
+                          </span>
+                          <span className="text-xs text-gray-500">({tz.abbr})</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* No results */}
+              {timezoneSearch &&
+                Object.values(getGroupedTimezones()).every(
+                  (tzs) =>
+                    tzs.filter(
+                      (tz) =>
+                        tz.label.toLowerCase().includes(timezoneSearch.toLowerCase()) ||
+                        tz.abbr.toLowerCase().includes(timezoneSearch.toLowerCase()) ||
+                        tz.value.toLowerCase().includes(timezoneSearch.toLowerCase())
+                    ).length === 0
+                ) && (
+                  <div className="px-4 py-8 text-center text-gray-500 text-sm">
+                    No timezones found matching "{timezoneSearch}"
+                  </div>
+                )}
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={handleSystemSubmit}
+                disabled={saving}
+                className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+              >
+                {saving ? 'Saving...' : 'Save Timezone'}
+              </button>
+            </div>
           </div>
           )}
 

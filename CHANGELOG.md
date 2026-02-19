@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.0] - 2026-02-19
+
+### Added
+
+#### Direct Google Chat Webhook Notifications
+
+Added direct Google Chat webhook integration for incident notifications. Sends alerts directly to a Google Chat space as an independent notification channel.
+
+**New Files:**
+- `backend/src/services/googleChatService.js` — Google Chat webhook delivery service
+- `database/migrations/004_add_google_chat_webhook.sql` — Migration for existing databases
+
+**Modified Files:**
+- `backend/src/services/incidentService.js` — Integrated Google Chat notifications on incident create/resolve
+- `backend/src/controllers/adminController.js` — Google Chat settings management and test endpoint
+- `backend/src/routes/admin.js` — Added `/admin/google-chat-test` route
+- `frontend/src/pages/Settings.jsx` — Added Google Chat configuration tab
+- `frontend/src/services/adminService.js` — Added `testGoogleChat` API function
+- `database/schema.sql` — Added `google_chat_webhook_url` and `google_chat_webhook_enabled` columns
+
+**Features:**
+- Fire-and-forget async delivery (does not block incident processing)
+- 10-second timeout with AbortController
+- Delivery logging to `webhook_logs` table with `gchat_` prefixed event types
+- Test notification button in Settings to verify webhook configuration
+
+**Migration Required:**
+```bash
+docker exec -i postgres psql -U postgres -d status_monitor < database/migrations/004_add_google_chat_webhook.sql
+```
+
+---
+
+#### Admin Timezone Support
+
+Added configurable timezone for admin notifications (Google Chat, email, webhook) and dashboard display. The public status page continues to use the visitor's browser timezone.
+
+**New Files:**
+- `backend/src/utils/timezone.js` — Backend timezone formatting utility
+- `database/migrations/005_add_admin_timezone.sql` — Migration for existing databases
+
+**Modified Files:**
+- `backend/src/services/emailService.js` — Uses admin timezone for email timestamps
+- `backend/src/services/webhookService.js` — Uses admin timezone for webhook timestamps
+- `backend/src/services/googleChatService.js` — Uses admin timezone for Google Chat timestamps
+- `frontend/src/contexts/TimezoneContext.jsx` — Enhanced with `initialTimezone` prop
+- `frontend/src/pages/AdminDashboard.jsx` — Timezone-aware display
+- `frontend/src/pages/Settings.jsx` — Added Timezone configuration tab with search
+- `frontend/src/utils/timezone.js` — Enhanced timezone abbreviation handling
+- `database/schema.sql` — Added `admin_timezone` column
+
+**Migration Required:**
+```bash
+docker exec -i postgres psql -U postgres -d status_monitor < database/migrations/005_add_admin_timezone.sql
+```
+
+---
+
 ## [1.3.4] - 2026-02-17
 
 ### Fixed
@@ -21,9 +79,9 @@ Optimized timeout handling and added connection retry mechanism to further reduc
 
 **Changes:**
 
-1. **Timeout optimization:** Increased undici's internal timeouts (`connect`, `headersTimeout`, `bodyTimeout`) to 120s so the per-API `AbortController` (using each API's `timeout_duration` from the dashboard) is the sole timeout authority. Previously, undici's 30s limit could terminate requests before the configured API timeout.
+1. Optimized timeout handling to let dashboard-configured API timeout settings take precedence, preventing premature request termination by the underlying HTTP client.
 
-2. **Connection retry mechanism:** Added automatic retry (1 attempt after 1s delay) for connection-level failures (DNS, TCP, TLS). HTTP-level failures (e.g., wrong status code) are not retried. This prevents transient network blips from being reported as downtime.
+2. Added automatic retry mechanism for transient connection failures (DNS, TCP, TLS), reducing false downtime alerts caused by temporary network disruptions.
 
 ---
 

@@ -1,6 +1,7 @@
 import { query } from '../config/database.js';
 import { sendDowntimeAlert, sendRecoveryNotification } from './emailService.js';
 import { sendWebhook } from './webhookService.js';
+import { sendGoogleChatNotification } from './googleChatService.js';
 
 /**
  * Auto-create incident when API goes down
@@ -52,6 +53,9 @@ export async function detectAndCreateIncident(api, statusCode = null) {
 
     // Send webhook notification for API down
     await sendWebhook('api_down', api, incident.rows[0]);
+
+    // Send Google Chat notification for API down
+    await sendGoogleChatNotification('api_down', api, incident.rows[0]);
 
     return incident.rows[0];
   } catch (error) {
@@ -115,6 +119,9 @@ export async function autoResolveIncident(api, currentStatusCode = null) {
 
     // Send webhook notification for API up (pass current status code for recovery)
     await sendWebhook('api_up', api, updatedIncident.rows[0], currentStatusCode);
+
+    // Send Google Chat notification for API up
+    await sendGoogleChatNotification('api_up', api, updatedIncident.rows[0], currentStatusCode);
 
     return incident;
   } catch (error) {

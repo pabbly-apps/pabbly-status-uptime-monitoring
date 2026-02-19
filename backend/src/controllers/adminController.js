@@ -672,6 +672,9 @@ export const updateSettings = async (req, res) => {
       data_retention_days,
       webhook_url,
       webhook_enabled,
+      google_chat_webhook_url,
+      google_chat_webhook_enabled,
+      admin_timezone,
     } = req.body;
 
     const updates = [];
@@ -729,6 +732,24 @@ export const updateSettings = async (req, res) => {
     if (webhook_enabled !== undefined) {
       updates.push(`webhook_enabled = $${paramCount}`);
       values.push(webhook_enabled);
+      paramCount++;
+    }
+
+    if (google_chat_webhook_url !== undefined) {
+      updates.push(`google_chat_webhook_url = $${paramCount}`);
+      values.push(google_chat_webhook_url);
+      paramCount++;
+    }
+
+    if (google_chat_webhook_enabled !== undefined) {
+      updates.push(`google_chat_webhook_enabled = $${paramCount}`);
+      values.push(google_chat_webhook_enabled);
+      paramCount++;
+    }
+
+    if (admin_timezone !== undefined) {
+      updates.push(`admin_timezone = $${paramCount}`);
+      values.push(admin_timezone);
       paramCount++;
     }
 
@@ -1170,6 +1191,40 @@ export const testWebhookEndpoint = async (req, res) => {
     res.status(500).json({
       error: 'Server error',
       message: 'Failed to test webhook',
+    });
+  }
+};
+
+// ============================================
+// GOOGLE CHAT WEBHOOK
+// ============================================
+
+export const testGoogleChat = async (req, res) => {
+  try {
+    const { testGoogleChatWebhook } = await import('../services/googleChatService.js');
+    const result = await testGoogleChatWebhook();
+
+    if (result.success) {
+      res.json({
+        success: true,
+        message: result.message,
+        statusCode: result.statusCode,
+        responseTime: result.responseTime,
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        message: result.message,
+        error: result.error,
+        statusCode: result.statusCode,
+        responseTime: result.responseTime,
+      });
+    }
+  } catch (error) {
+    console.error('Test Google Chat webhook error:', error);
+    res.status(500).json({
+      error: 'Server error',
+      message: 'Failed to test Google Chat webhook',
     });
   }
 };
