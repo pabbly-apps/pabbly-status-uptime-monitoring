@@ -165,9 +165,9 @@ export async function sendGoogleChatNotification(eventType, api, incident, curre
         return;
       }
 
-      // Send with 10-second timeout
+      // Send with 30-second timeout
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
 
       const response = await fetch(google_chat_webhook_url, {
         method: 'POST',
@@ -206,7 +206,7 @@ export async function sendGoogleChatNotification(eventType, api, incident, curre
     } catch (error) {
       const responseTime = Date.now() - startTime;
       errorMessage = error.name === 'AbortError'
-        ? 'Request timeout after 10 seconds'
+        ? 'Request timeout after 30 seconds'
         : error.message;
 
       console.error(`Google Chat webhook error for ${eventType}:`, errorMessage);
@@ -264,7 +264,7 @@ export async function testGoogleChatWebhook() {
     const payload = buildTestPayload(admin_timezone || 'UTC');
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
 
     const response = await fetch(google_chat_webhook_url, {
       method: 'POST',
@@ -299,7 +299,7 @@ export async function testGoogleChatWebhook() {
     return {
       success: false,
       message: 'Failed to send test notification to Google Chat',
-      error: error.name === 'AbortError' ? 'Request timeout after 10 seconds' : error.message,
+      error: error.name === 'AbortError' ? 'Request timeout after 30 seconds' : error.message,
       responseTime,
     };
   }

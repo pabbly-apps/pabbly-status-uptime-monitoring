@@ -29,7 +29,7 @@ Added direct Google Chat webhook integration for incident notifications. Sends a
 
 **Features:**
 - Fire-and-forget async delivery (does not block incident processing)
-- 10-second timeout with AbortController
+- 30-second timeout with AbortController
 - Delivery logging to `webhook_logs` table with `gchat_` prefixed event types
 - Test notification button in Settings to verify webhook configuration
 
