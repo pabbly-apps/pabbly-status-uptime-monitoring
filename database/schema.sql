@@ -12,8 +12,12 @@
 CREATE TABLE IF NOT EXISTS admin_user (
   id SERIAL PRIMARY KEY,
   email VARCHAR(255) UNIQUE NOT NULL,
-  password_hash TEXT NOT NULL,
+  password_hash TEXT,
   full_name VARCHAR(255),
+  google_id VARCHAR(255) UNIQUE,
+  profile_picture TEXT,
+  added_by INTEGER REFERENCES admin_user(id) ON DELETE SET NULL,
+  is_active BOOLEAN DEFAULT TRUE,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   last_login TIMESTAMP
@@ -21,6 +25,9 @@ CREATE TABLE IF NOT EXISTS admin_user (
 
 -- Index for faster email lookups during login
 CREATE INDEX IF NOT EXISTS idx_admin_email ON admin_user(email);
+
+-- Index for Google SSO lookups
+CREATE INDEX IF NOT EXISTS idx_admin_google_id ON admin_user(google_id);
 
 
 -- ============================================================================
@@ -42,6 +49,9 @@ CREATE TABLE IF NOT EXISTS system_settings (
   admin_timezone VARCHAR(50) DEFAULT 'UTC',
   data_retention_days INTEGER DEFAULT 90,
 
+  -- Google SSO Domain Restriction ('*' for all, or comma-separated domains like 'pabbly.com,example.com')
+  allowed_domains TEXT DEFAULT '*',
+
   -- SMTP Email Settings
   smtp_host TEXT,
   smtp_port INTEGER DEFAULT 587,
@@ -57,8 +67,8 @@ CREATE TABLE IF NOT EXISTS system_settings (
 );
 
 -- Insert default settings row
-INSERT INTO system_settings (id, page_title, brand_color, notifications_enabled, webhook_enabled, google_chat_webhook_enabled, admin_timezone, data_retention_days, smtp_port)
-VALUES (1, 'System Status', '#3b82f6', FALSE, FALSE, FALSE, 'UTC', 90, 587)
+INSERT INTO system_settings (id, page_title, brand_color, notifications_enabled, webhook_enabled, google_chat_webhook_enabled, admin_timezone, data_retention_days, smtp_port, allowed_domains)
+VALUES (1, 'System Status', '#3b82f6', FALSE, FALSE, FALSE, 'UTC', 90, 587, '*')
 ON CONFLICT (id) DO NOTHING;
 
 
@@ -233,22 +243,10 @@ CREATE INDEX IF NOT EXISTS idx_webhook_logs_event_type ON webhook_logs(event_typ
 -- ============================================================================
 -- DEFAULT ADMIN USER
 -- ============================================================================
--- Creates a default admin account for initial login
--- IMPORTANT: Change the password immediately after first login for security!
---
--- Default Credentials:
---   Email: admin@example.com
---   Password: admin123
---
--- After logging in, go to Settings > Profile to change your password
-
-INSERT INTO admin_user (email, password_hash, full_name)
-VALUES (
-  'admin@example.com',
-  '$2b$10$VOgA.0dig5CThvoXu3JZteOHp5hVLygMmbF9dOP4rHOvLqHEMLAlK',
-  'System Administrator'
-)
-ON CONFLICT (email) DO NOTHING;
+-- The first admin user is automatically created on server startup
+-- from the ADMIN_EMAIL environment variable (set in backend/.env).
+-- No manual SQL editing is needed.
+-- ============================================================================
 
 
 -- ============================================================================
@@ -270,10 +268,8 @@ ON CONFLICT DO NOTHING;
 -- Your Status Monitor database is now ready to use!
 --
 -- Next steps:
--- 1. Start the backend server: cd backend && npm run dev
--- 2. Start the frontend: cd frontend && npm run dev
--- 3. Login at http://localhost:5173/admin/login
---    Email: admin@example.com
---    Password: admin123
--- 4. IMPORTANT: Change your password immediately after logging in!
+-- 1. Set ADMIN_EMAIL in backend/.env to your Google account email
+-- 2. Start the backend server: cd backend && npm run dev
+-- 3. Start the frontend: cd frontend && npm run dev
+-- 4. Login at http://localhost:5173/admin/login using Google SSO
 -- ============================================================================

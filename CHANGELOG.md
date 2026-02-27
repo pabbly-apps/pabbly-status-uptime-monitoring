@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.5.0] - 2026-02-27
+
+### Added
+
+#### Google SSO Authentication
+
+Replaced password-based login with Google SSO for secure, passwordless authentication.
+
+**New Files:**
+- `database/migrations/006_google_sso.sql` — Migration adding Google SSO columns, domain restrictions, and user tracking
+
+**Modified Files:**
+- `backend/src/controllers/authController.js` — Google SSO login, domain validation, user management with `added_by` tracking
+- `backend/src/routes/auth.js` — Updated auth routes for Google SSO
+- `backend/src/server.js` — Auto-seed first admin from `ADMIN_EMAIL` env var on startup
+- `backend/.env.example` — Added `GOOGLE_CLIENT_ID` and `ADMIN_EMAIL` config
+- `frontend/src/pages/Login.jsx` — Google Sign-In button replacing email/password form
+- `frontend/src/pages/Settings.jsx` — Domain management UI, user tracking ("Added By" column)
+- `frontend/src/services/authService.js` — Google login integration
+- `frontend/.env.example` — Added `VITE_GOOGLE_CLIENT_ID`
+- `database/schema.sql` — Added `google_id`, `profile_picture`, `is_active`, `added_by`, `allowed_domains` columns
+
+**Features:**
+- Google OAuth2 token verification via `google-auth-library`
+- Domain-based access control (restrict login to specific email domains)
+- Tag-based domain input with validation in Settings UI
+- User pre-registration (admin adds user email, user logs in via Google SSO)
+- "Added By" tracking — shows who added each user in the users table
+- Auto-seed default admin from `ADMIN_EMAIL` env var (runs only on first setup when no users exist)
+- `is_active` flag for disabling users without deletion
+
+**First-Time Setup:**
+1. Set `ADMIN_EMAIL` and `GOOGLE_CLIENT_ID` in `backend/.env`
+2. Set `VITE_GOOGLE_CLIENT_ID` in `frontend/.env`
+3. Run schema.sql — the backend auto-creates the admin user on first startup
+
+**Migration Required (existing databases):**
+```bash
+psql -U postgres -d status_monitor < database/migrations/006_google_sso.sql
+```
+
+---
+
 ## [1.4.0] - 2026-02-19
 
 ### Added

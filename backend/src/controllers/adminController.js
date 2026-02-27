@@ -675,6 +675,7 @@ export const updateSettings = async (req, res) => {
       google_chat_webhook_url,
       google_chat_webhook_enabled,
       admin_timezone,
+      allowed_domains,
     } = req.body;
 
     const updates = [];
@@ -750,6 +751,12 @@ export const updateSettings = async (req, res) => {
     if (admin_timezone !== undefined) {
       updates.push(`admin_timezone = $${paramCount}`);
       values.push(admin_timezone);
+      paramCount++;
+    }
+
+    if (allowed_domains !== undefined) {
+      updates.push(`allowed_domains = $${paramCount}`);
+      values.push(allowed_domains);
       paramCount++;
     }
 

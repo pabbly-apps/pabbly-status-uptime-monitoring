@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { getProfile, updateProfile, changePassword, getCurrentUser } from '../services/authService';
+import { getUsers, addUser as addUserService, removeUser as removeUserService } from '../services/authService';
 import { getSettings, updateSettings, uploadLogo, getEmailSettings, updateEmailSettings, testEmail, testWebhook, testGoogleChat, getVersion } from '../services/adminService';
 import { getGroupedTimezones, getTimezoneLabel, getTimezoneAbbreviation, findTimezone } from '../utils/timezone';
 import Loading from '../components/shared/Loading';
@@ -22,21 +22,20 @@ export default function Settings() {
   const [emailTags, setEmailTags] = useState([]);
   const [timezoneSearch, setTimezoneSearch] = useState('');
 
-  // Get active tab from URL params, default to 'account'
-  const [activeTab, setActiveTab] = useState(searchParams.get('tab') || 'account');
+  // Get active tab from URL params, default to 'users'
+  const [activeTab, setActiveTab] = useState(searchParams.get('tab') || 'users');
 
-  // Account Settings
-  const [profileData, setProfileData] = useState({
-    email: '',
-    full_name: '',
-  });
+  // User Management
+  const [users, setUsers] = useState([]);
+  const [newUserEmail, setNewUserEmail] = useState('');
+  const [addingUser, setAddingUser] = useState(false);
+  const [removingUserId, setRemovingUserId] = useState(null);
 
-  // Password Change
-  const [passwordData, setPasswordData] = useState({
-    current_password: '',
-    new_password: '',
-    confirm_password: '',
-  });
+  // Domain Management
+  const [domainTags, setDomainTags] = useState([]);
+  const [domainInputValue, setDomainInputValue] = useState('');
+  const [allDomainsAllowed, setAllDomainsAllowed] = useState(true);
+  const [savingDomains, setSavingDomains] = useState(false);
 
   // System Settings
   const [systemSettings, setSystemSettings] = useState({
@@ -51,6 +50,7 @@ export default function Settings() {
     google_chat_webhook_enabled: false,
     logo_url: '',
     admin_timezone: 'UTC',
+    allowed_domains: '*',
   });
 
   // Email SMTP Settings
@@ -82,41 +82,10 @@ export default function Settings() {
 
   const fetchData = async () => {
     try {
-      // Try to get user from localStorage first as fallback
-      const currentUser = getCurrentUser();
-
-      // Fetch profile and settings
-      const promises = [];
-
-      // Only fetch profile if we don't have user data in localStorage
-      if (currentUser) {
-        // Use localStorage data directly
-        setProfileData({
-          email: currentUser.email || '',
-          full_name: currentUser.full_name || '',
-        });
-        promises.push(getSettings());
-      } else {
-        // Fetch both
-        promises.push(getProfile(), getSettings());
-      }
-
-      const results = await Promise.all(promises);
-
-      // Handle profile data if we fetched it
-      if (!currentUser && results.length === 2) {
-        const profileRes = results[0];
-        if (profileRes && profileRes.admin) {
-          setProfileData({
-            email: profileRes.admin.email || '',
-            full_name: profileRes.admin.full_name || '',
-          });
-        }
-      }
-
-      // Handle settings data
-      const settingsRes = currentUser ? results[0] : results[1];
+      // Fetch settings
+      const settingsRes = await getSettings();
       if (settingsRes && settingsRes.settings) {
+        const domains = settingsRes.settings.allowed_domains || '*';
         setSystemSettings({
           page_title: settingsRes.settings.page_title || '',
           brand_color: settingsRes.settings.brand_color || '#3b82f6',
@@ -129,7 +98,18 @@ export default function Settings() {
           google_chat_webhook_enabled: settingsRes.settings.google_chat_webhook_enabled || false,
           logo_url: settingsRes.settings.logo_url || '',
           admin_timezone: settingsRes.settings.admin_timezone || 'UTC',
+          allowed_domains: domains,
         });
+
+        // Initialize domain tags from settings
+        if (domains.trim() === '*') {
+          setAllDomainsAllowed(true);
+          setDomainTags([]);
+        } else {
+          setAllDomainsAllowed(false);
+          const tags = domains.split(',').map(d => d.trim()).filter(Boolean);
+          setDomainTags(tags);
+        }
 
         // Set logo preview if logo exists
         if (settingsRes.settings.logo_url) {
@@ -176,6 +156,16 @@ export default function Settings() {
         console.error('Error fetching version:', error);
       }
 
+      // Fetch users
+      try {
+        const usersRes = await getUsers();
+        if (usersRes && usersRes.users) {
+          setUsers(usersRes.users);
+        }
+      } catch (error) {
+        console.error('Error fetching users:', error);
+      }
+
       setLoading(false);
     } catch (error) {
       console.error('Error fetching settings:', error);
@@ -188,20 +178,6 @@ export default function Settings() {
   const handleTabChange = (tab) => {
     setActiveTab(tab);
     setSearchParams({ tab });
-  };
-
-  const handleProfileChange = (e) => {
-    setProfileData({
-      ...profileData,
-      [e.target.name]: e.target.value,
-    });
-  };
-
-  const handlePasswordChange = (e) => {
-    setPasswordData({
-      ...passwordData,
-      [e.target.name]: e.target.value,
-    });
   };
 
   const handleSystemChange = (e) => {
@@ -219,58 +195,50 @@ export default function Settings() {
     });
   };
 
-  const handleProfileSubmit = async (e) => {
+  const handleAddUser = async (e) => {
     e.preventDefault();
-    setSaving(true);
+    const trimmedEmail = newUserEmail.trim().toLowerCase();
 
-    try {
-      await updateProfile(profileData);
-      toast.success('Profile updated successfully. Please log out and log back in for changes to take effect.');
+    if (!trimmedEmail) {
+      toast.error('Please enter an email address');
+      return;
+    }
 
-      // Refresh profile data
-      const profileRes = await getProfile();
-      if (profileRes && profileRes.profile) {
-        setProfileData({
-          email: profileRes.profile.email || '',
-          full_name: profileRes.profile.full_name || '',
-        });
+    // Validate against allowed domains (client-side check, backend also validates)
+    if (!allDomainsAllowed && domainTags.length > 0) {
+      const emailDomain = trimmedEmail.split('@')[1];
+      if (!domainTags.includes(emailDomain)) {
+        toast.error(`Only emails from allowed domains (${domainTags.map(d => '@' + d).join(', ')}) can be added`);
+        return;
       }
+    }
+
+    setAddingUser(true);
+    try {
+      await addUserService(trimmedEmail);
+      toast.success('User added successfully');
+      setNewUserEmail('');
+      // Refresh user list
+      const usersRes = await getUsers();
+      if (usersRes?.users) setUsers(usersRes.users);
     } catch (error) {
-      console.error('Update error:', error);
-      toast.error(error.response?.data?.message || 'Failed to update profile');
+      toast.error(error.response?.data?.message || 'Failed to add user');
     } finally {
-      setSaving(false);
+      setAddingUser(false);
     }
   };
 
-  const handlePasswordSubmit = async (e) => {
-    e.preventDefault();
-
-    if (passwordData.new_password !== passwordData.confirm_password) {
-      toast.error('New passwords do not match');
-      return;
-    }
-
-    if (passwordData.new_password.length < 6) {
-      toast.error('Password must be at least 6 characters');
-      return;
-    }
-
-    setSaving(true);
-
+  const handleRemoveUser = async (userId) => {
+    if (!confirm('Are you sure you want to remove this user? They will no longer be able to log in.')) return;
+    setRemovingUserId(userId);
     try {
-      await changePassword(passwordData.current_password, passwordData.new_password);
-      toast.success('Password changed successfully');
-      setPasswordData({
-        current_password: '',
-        new_password: '',
-        confirm_password: '',
-      });
+      await removeUserService(userId);
+      toast.success('User removed successfully');
+      setUsers(users.filter(u => u.id !== userId));
     } catch (error) {
-      console.error('Password change error:', error);
-      toast.error(error.response?.data?.message || 'Failed to change password');
+      toast.error(error.response?.data?.message || 'Failed to remove user');
     } finally {
-      setSaving(false);
+      setRemovingUserId(null);
     }
   };
 
@@ -286,6 +254,75 @@ export default function Settings() {
       toast.error(error.response?.data?.message || 'Failed to update settings');
     } finally {
       setSaving(false);
+    }
+  };
+
+  // Domain management handlers
+  const handleDomainInputKeyDown = (e) => {
+    if (e.key === 'Enter' || e.key === ',' || e.key === ' ') {
+      e.preventDefault();
+      addDomainTag();
+    } else if (e.key === 'Backspace' && !domainInputValue && domainTags.length > 0) {
+      removeDomainTag(domainTags.length - 1);
+    }
+  };
+
+  const addDomainTag = (showError = true) => {
+    const trimmed = domainInputValue.trim().toLowerCase().replace(/^@/, '');
+    if (trimmed && !domainTags.includes(trimmed)) {
+      // Basic domain validation
+      if (/^[a-z0-9]+([\-.][a-z0-9]+)*\.[a-z]{2,}$/.test(trimmed)) {
+        setDomainTags([...domainTags, trimmed]);
+        setDomainInputValue('');
+      } else if (showError) {
+        toast.error('Please enter a valid domain (e.g., example.com)');
+      }
+    } else {
+      setDomainInputValue('');
+    }
+  };
+
+  const removeDomainTag = (indexToRemove) => {
+    setDomainTags(domainTags.filter((_, index) => index !== indexToRemove));
+  };
+
+  const handleSaveDomains = async () => {
+    // If there's text in the input, validate it before saving
+    const pendingText = domainInputValue.trim().toLowerCase().replace(/^@/, '');
+    if (pendingText) {
+      if (/^[a-z0-9]+([\-.][a-z0-9]+)*\.[a-z]{2,}$/.test(pendingText)) {
+        // Valid domain — auto-add it as a tag
+        if (!domainTags.includes(pendingText)) {
+          domainTags.push(pendingText);
+          setDomainTags([...domainTags]);
+        }
+        setDomainInputValue('');
+      } else {
+        toast.error('Please enter a valid domain (e.g., example.com)');
+        return;
+      }
+    }
+
+    let domainsValue;
+    if (allDomainsAllowed) {
+      domainsValue = '*';
+    } else {
+      if (domainTags.length === 0) {
+        toast.error('Please add at least one domain or select "Allow all domains"');
+        return;
+      }
+      domainsValue = domainTags.join(', ');
+    }
+
+    setSavingDomains(true);
+    try {
+      await updateSettings({ allowed_domains: domainsValue });
+      setSystemSettings({ ...systemSettings, allowed_domains: domainsValue });
+      toast.success('Allowed domains updated successfully');
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to update allowed domains');
+    } finally {
+      setSavingDomains(false);
     }
   };
 
@@ -640,24 +677,14 @@ export default function Settings() {
         <div className="bg-white rounded-t-lg border border-gray-200 border-b-0">
           <div className="flex overflow-x-auto border-b border-gray-200 overflow-y-hidden" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
             <button
-              onClick={() => handleTabChange('account')}
+              onClick={() => handleTabChange('users')}
               className={`px-4 sm:px-6 py-3 text-xs sm:text-sm font-medium border-b-2 transition-colors whitespace-nowrap flex-shrink-0 ${
-                activeTab === 'account'
+                activeTab === 'users'
                   ? 'border-blue-600 text-blue-600'
                   : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
               }`}
             >
-              Account
-            </button>
-            <button
-              onClick={() => handleTabChange('password')}
-              className={`px-4 sm:px-6 py-3 text-xs sm:text-sm font-medium border-b-2 transition-colors whitespace-nowrap flex-shrink-0 ${
-                activeTab === 'password'
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              Password
+              Users
             </button>
             <button
               onClick={() => handleTabChange('system')}
@@ -714,116 +741,208 @@ export default function Settings() {
 
         {/* Tab Content */}
         <div className="bg-white rounded-b-lg border border-gray-200 p-6">
-          {/* Account Settings Tab */}
-          {activeTab === 'account' && (
-            <div>
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">
-              Account Settings
-            </h2>
-            <form onSubmit={handleProfileSubmit} className="space-y-4">
-              <div>
-                <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
-                  Email Address
-                </label>
-                <input
-                  type="email"
-                  id="email"
-                  name="email"
-                  value={profileData.email}
-                  onChange={handleProfileChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                />
-              </div>
-
-              <div>
-                <label htmlFor="full_name" className="block text-sm font-medium text-gray-700 mb-1">
-                  Full Name
-                </label>
-                <input
-                  type="text"
-                  id="full_name"
-                  name="full_name"
-                  value={profileData.full_name}
-                  onChange={handleProfileChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                />
-              </div>
-
-              <div className="flex justify-end">
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
-                >
-                  {saving ? 'Saving...' : 'Update Profile'}
-                </button>
-              </div>
-            </form>
-          </div>
-          )}
-
-          {/* Change Password Tab */}
-          {activeTab === 'password' && (
+          {/* Users Management Tab */}
+          {activeTab === 'users' && (
           <div>
             <h2 className="text-lg font-semibold text-gray-900 mb-4">
-              Change Password
+              User Management
             </h2>
-            <form onSubmit={handlePasswordSubmit} className="space-y-4">
-              <div>
-                <label htmlFor="current_password" className="block text-sm font-medium text-gray-700 mb-1">
-                  Current Password
-                </label>
+
+            <div className="bg-blue-50 border border-blue-200 rounded-md p-4 mb-6">
+              <div className="flex">
+                <div className="flex-shrink-0">
+                  <svg className="h-5 w-5 text-blue-400" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                  </svg>
+                </div>
+                <div className="ml-3 flex-1">
+                  <p className="text-sm text-blue-700">
+                    Configure which email domains can sign in via Google SSO, then add specific users. Both the domain and the user must be allowed for login to succeed.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Allowed Domains Section */}
+            <div className="mb-8 p-4 border border-gray-200 rounded-md bg-gray-50">
+              <h3 className="text-sm font-semibold text-gray-900 mb-3">Allowed Domains</h3>
+
+              <div className="flex items-center mb-3">
                 <input
-                  type="password"
-                  id="current_password"
-                  name="current_password"
-                  value={passwordData.current_password}
-                  onChange={handlePasswordChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                  required
+                  type="checkbox"
+                  id="all_domains_allowed"
+                  checked={allDomainsAllowed}
+                  onChange={(e) => {
+                    setAllDomainsAllowed(e.target.checked);
+                    if (e.target.checked) {
+                      setDomainTags([]);
+                    }
+                  }}
+                  className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
                 />
+                <label htmlFor="all_domains_allowed" className="ml-2 block text-sm text-gray-900">
+                  Allow all Google account domains
+                </label>
               </div>
 
-              <div>
-                <label htmlFor="new_password" className="block text-sm font-medium text-gray-700 mb-1">
-                  New Password
-                </label>
-                <input
-                  type="password"
-                  id="new_password"
-                  name="new_password"
-                  value={passwordData.new_password}
-                  onChange={handlePasswordChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                  required
-                />
-              </div>
-
-              <div>
-                <label htmlFor="confirm_password" className="block text-sm font-medium text-gray-700 mb-1">
-                  Confirm New Password
-                </label>
-                <input
-                  type="password"
-                  id="confirm_password"
-                  name="confirm_password"
-                  value={passwordData.confirm_password}
-                  onChange={handlePasswordChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                  required
-                />
-              </div>
+              {!allDomainsAllowed && (
+                <div className="mb-3">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Specific Domains
+                  </label>
+                  <div className="w-full min-h-[42px] px-3 py-2 border border-gray-300 rounded-md shadow-sm focus-within:ring-2 focus-within:ring-blue-500 focus-within:border-blue-500 bg-white">
+                    <div className="flex flex-wrap gap-2 items-center">
+                      {domainTags.map((domain, index) => (
+                        <span
+                          key={index}
+                          className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-800 text-sm rounded-md"
+                        >
+                          @{domain}
+                          <button
+                            type="button"
+                            onClick={() => removeDomainTag(index)}
+                            className="hover:bg-blue-200 rounded-full p-0.5 transition-colors"
+                          >
+                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                            </svg>
+                          </button>
+                        </span>
+                      ))}
+                      <input
+                        type="text"
+                        value={domainInputValue}
+                        onChange={(e) => setDomainInputValue(e.target.value)}
+                        onKeyDown={handleDomainInputKeyDown}
+                        onBlur={() => addDomainTag(false)}
+                        placeholder={domainTags.length === 0 ? "e.g., example.com or @example.com" : "@"}
+                        className="flex-1 min-w-[200px] outline-none border-0 focus:ring-0 p-0 text-sm"
+                      />
+                    </div>
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Type a domain (e.g., example.com or @example.com) and press Enter, comma, or space to add. Only users from these domains can be added and can log in.
+                  </p>
+                </div>
+              )}
 
               <div className="flex justify-end">
                 <button
-                  type="submit"
-                  disabled={saving}
+                  type="button"
+                  onClick={handleSaveDomains}
+                  disabled={savingDomains}
                   className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
                 >
-                  {saving ? 'Changing...' : 'Change Password'}
+                  {savingDomains ? 'Saving...' : 'Save Domains'}
                 </button>
               </div>
+            </div>
+
+            {/* Add User Form */}
+            <form onSubmit={handleAddUser} className="mb-6">
+              <label htmlFor="new_user_email" className="block text-sm font-medium text-gray-700 mb-1">
+                Add New User
+              </label>
+              <div className="flex gap-3">
+                <input
+                  type="email"
+                  id="new_user_email"
+                  value={newUserEmail}
+                  onChange={(e) => setNewUserEmail(e.target.value)}
+                  placeholder="user@example.com"
+                  className="flex-1 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                  required
+                />
+                <button
+                  type="submit"
+                  disabled={addingUser}
+                  className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 whitespace-nowrap"
+                >
+                  {addingUser ? 'Adding...' : 'Add User'}
+                </button>
+              </div>
+              <p className="mt-1 text-xs text-gray-500">
+                {allDomainsAllowed
+                  ? 'Any Google account can be added (user must still be pre-added here)'
+                  : `Only Google accounts from: ${domainTags.map(d => '@' + d).join(', ') || '(no domains configured)'}`
+                }
+              </p>
             </form>
+
+            {/* Users List */}
+            <div className="border border-gray-200 rounded-md overflow-hidden">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">User</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden sm:table-cell">Status</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden sm:table-cell">Added By</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden sm:table-cell">Last Login</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {users.map((u) => (
+                    <tr key={u.id}>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          {u.profile_picture ? (
+                            <img src={u.profile_picture} alt="" className="h-8 w-8 rounded-full" referrerPolicy="no-referrer" />
+                          ) : (
+                            <div className="h-8 w-8 rounded-full bg-gray-200 flex items-center justify-center">
+                              <svg className="h-4 w-4 text-gray-500" fill="currentColor" viewBox="0 0 20 20">
+                                <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" />
+                              </svg>
+                            </div>
+                          )}
+                          <div>
+                            <p className="text-sm font-medium text-gray-900">{u.full_name || u.email}</p>
+                            {u.full_name && <p className="text-xs text-gray-500">{u.email}</p>}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 hidden sm:table-cell">
+                        {u.last_login ? (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                            Active
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+                            Pending
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-500 hidden sm:table-cell">
+                        {u.added_by_name || u.added_by_email || 'System'}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-500 hidden sm:table-cell">
+                        {u.last_login ? new Date(u.last_login).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Never'}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        {u.id === user?.id ? (
+                          <span className="text-xs text-gray-400">You</span>
+                        ) : (
+                          <button
+                            onClick={() => handleRemoveUser(u.id)}
+                            disabled={removingUserId === u.id}
+                            className="text-red-600 hover:text-red-800 text-sm font-medium disabled:opacity-50"
+                          >
+                            {removingUserId === u.id ? 'Removing...' : 'Remove'}
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  {users.length === 0 && (
+                    <tr>
+                      <td colSpan="5" className="px-4 py-8 text-center text-gray-500 text-sm">
+                        No users found. Add an email above to get started.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
           )}
 
