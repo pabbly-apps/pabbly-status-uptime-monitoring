@@ -1,52 +1,75 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { login as loginService } from '../services/authService';
+import { googleLogin } from '../services/authService';
 import { useAuth } from '../context/AuthContext';
 import toast from 'react-hot-toast';
 
 export default function Login() {
   const navigate = useNavigate();
   const { login, isAuthenticated } = useAuth();
-  const [formData, setFormData] = useState({
-    email: '',
-    password: '',
-  });
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const googleButtonRef = useRef(null);
 
-  // Redirect if already logged in
   useEffect(() => {
     if (isAuthenticated) {
       navigate('/admin/dashboard');
+      return;
+    }
+
+    // Initialize Google Identity Services
+    if (window.google?.accounts?.id) {
+      initializeGIS();
+    } else {
+      // Wait for the script to load
+      const checkGoogle = setInterval(() => {
+        if (window.google?.accounts?.id) {
+          clearInterval(checkGoogle);
+          initializeGIS();
+        }
+      }, 100);
+      return () => clearInterval(checkGoogle);
     }
   }, [isAuthenticated, navigate]);
 
-  const handleChange = (e) => {
-    setFormData({
-      ...formData,
-      [e.target.name]: e.target.value,
+  const initializeGIS = () => {
+    window.google.accounts.id.initialize({
+      client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID,
+      callback: handleGoogleCallback,
+      auto_select: false,
+      context: 'signin',
     });
+
+    if (googleButtonRef.current) {
+      window.google.accounts.id.renderButton(googleButtonRef.current, {
+        type: 'standard',
+        theme: 'outline',
+        size: 'large',
+        text: 'signin_with',
+        width: 300,
+      });
+    }
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const handleGoogleCallback = async (response) => {
     setLoading(true);
+    setError('');
 
     try {
-      const response = await loginService(formData.email, formData.password);
+      const result = await googleLogin(response.credential);
 
-      if (response.success) {
-        // Update auth context - backend returns 'user' field
-        const userData = response.admin || response.user;
-        login(userData, response.token);
-
+      if (result.success) {
+        login(result.user, result.token);
         toast.success('Login successful!');
         navigate('/admin/dashboard');
       } else {
-        toast.error(response.message || 'Login failed');
+        setError(result.message || 'Login failed');
+        toast.error(result.message || 'Login failed');
       }
-    } catch (error) {
-      console.error('Login error:', error);
-      toast.error(error.response?.data?.message || 'Invalid email or password');
+    } catch (err) {
+      const message = err.response?.data?.message || 'Authentication failed';
+      setError(message);
+      toast.error(message);
     } finally {
       setLoading(false);
     }
@@ -59,75 +82,36 @@ export default function Login() {
           Admin Login
         </h2>
         <p className="mt-2 text-center text-sm text-gray-600">
-          Sign in to manage your status monitor
+          Sign in with your Google account
         </p>
       </div>
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
         <div className="bg-white py-8 px-4 shadow sm:rounded-lg sm:px-10">
-          <form className="space-y-6" onSubmit={handleSubmit}>
-            {/* Email */}
-            <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700">
-                Email address
-              </label>
-              <div className="mt-1">
-                <input
-                  id="email"
-                  name="email"
-                  type="email"
-                  autoComplete="email"
-                  required
-                  value={formData.email}
-                  onChange={handleChange}
-                  className="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                  placeholder="admin@example.com"
-                />
+          <div className="flex flex-col items-center space-y-4">
+            {/* Google Sign-In Button */}
+            <div ref={googleButtonRef}></div>
+
+            {loading && (
+              <div className="flex items-center space-x-2">
+                <svg className="animate-spin h-5 w-5 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <p className="text-sm text-gray-500">Verifying your account...</p>
               </div>
-            </div>
+            )}
 
-            {/* Password */}
-            <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-700">
-                Password
-              </label>
-              <div className="mt-1">
-                <input
-                  id="password"
-                  name="password"
-                  type="password"
-                  autoComplete="current-password"
-                  required
-                  value={formData.password}
-                  onChange={handleChange}
-                  className="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                  placeholder="Enter your password"
-                />
+            {error && (
+              <div className="w-full p-3 bg-red-50 border border-red-200 rounded-md">
+                <p className="text-sm text-red-600">{error}</p>
               </div>
-            </div>
+            )}
 
-            {/* Submit Button */}
-            <div>
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {loading ? (
-                  <span className="flex items-center">
-                    <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    Signing in...
-                  </span>
-                ) : (
-                  'Sign in'
-                )}
-              </button>
-            </div>
-          </form>
-
+            <p className="text-xs text-gray-400 mt-4">
+              Only pre-approved accounts can sign in
+            </p>
+          </div>
         </div>
       </div>
     </div>

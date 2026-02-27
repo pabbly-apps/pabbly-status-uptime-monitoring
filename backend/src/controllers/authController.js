@@ -1,82 +1,122 @@
-import bcrypt from 'bcrypt';
+import { OAuth2Client } from 'google-auth-library';
 import { query } from '../config/database.js';
 import { generateAccessToken } from '../middleware/auth.js';
 
-// Admin login
-export const login = async (req, res) => {
-  try {
-    const { email, password } = req.body;
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
-    // Validation
-    if (!email || !password) {
+// Helper: get allowed domains from system_settings
+const getAllowedDomains = async () => {
+  const result = await query('SELECT allowed_domains FROM system_settings WHERE id = 1');
+  const raw = result.rows[0]?.allowed_domains || '*';
+  if (raw.trim() === '*') return null; // null means all domains allowed
+  return raw.split(',').map(d => d.trim().toLowerCase()).filter(Boolean);
+};
+
+// Helper: check if an email's domain is in the allowed list
+const isDomainAllowed = (email, allowedDomains) => {
+  if (!allowedDomains) return true; // '*' — all domains allowed
+  const domain = email.split('@')[1]?.toLowerCase();
+  return allowedDomains.includes(domain);
+};
+
+// Google SSO login
+export const googleLogin = async (req, res) => {
+  try {
+    const { credential } = req.body;
+
+    if (!credential) {
       return res.status(400).json({
         error: 'Validation error',
-        message: 'Email and password are required',
+        message: 'Google credential is required',
       });
     }
 
-    // Find admin user
+    // Verify the Google ID token
+    const ticket = await googleClient.verifyIdToken({
+      idToken: credential,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+
+    const payload = ticket.getPayload();
+    const { sub: googleId, email, name, picture } = payload;
+
+    // Check domain against configured allowed domains
+    const allowedDomains = await getAllowedDomains();
+
+    if (!isDomainAllowed(email, allowedDomains)) {
+      const domainList = allowedDomains.join(', ');
+      return res.status(403).json({
+        error: 'Access denied',
+        message: `Only accounts from allowed domains (${domainList}) can sign in`,
+      });
+    }
+
+    // Check if user exists and is allowed
     const result = await query(
-      'SELECT id, email, password_hash, full_name, last_login FROM admin_user WHERE email = $1',
+      'SELECT id, email, full_name, google_id, profile_picture, is_active, last_login FROM admin_user WHERE email = $1',
       [email]
     );
 
     if (result.rows.length === 0) {
-      return res.status(401).json({
-        error: 'Authentication failed',
-        message: 'Invalid email or password',
+      return res.status(403).json({
+        error: 'Access denied',
+        message: 'Your account has not been added by an administrator. Please contact an admin.',
       });
     }
 
-    const admin = result.rows[0];
+    const user = result.rows[0];
 
-    // Verify password
-    const isPasswordValid = await bcrypt.compare(password, admin.password_hash);
-
-    if (!isPasswordValid) {
-      return res.status(401).json({
-        error: 'Authentication failed',
-        message: 'Invalid email or password',
+    if (!user.is_active) {
+      return res.status(403).json({
+        error: 'Account disabled',
+        message: 'Your account has been deactivated. Please contact an administrator.',
       });
     }
 
-    // Generate JWT token
-    const token = generateAccessToken({
-      id: admin.id,
-      email: admin.email,
-    });
-
-    // Update last login timestamp
+    // Update user with Google info (first-time or subsequent logins)
     await query(
-      'UPDATE admin_user SET last_login = CURRENT_TIMESTAMP WHERE id = $1',
-      [admin.id]
+      `UPDATE admin_user
+       SET google_id = $1, full_name = $2, profile_picture = $3,
+           last_login = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $4`,
+      [googleId, name, picture, user.id]
     );
 
-    // Return user info and token
+    // Generate JWT (same mechanism as before)
+    const token = generateAccessToken({
+      id: user.id,
+      email: user.email,
+    });
+
     res.json({
       success: true,
       message: 'Login successful',
       token,
       user: {
-        id: admin.id,
-        email: admin.email,
-        full_name: admin.full_name,
-        last_login: admin.last_login,
+        id: user.id,
+        email,
+        full_name: name,
+        profile_picture: picture,
+        last_login: user.last_login,
       },
     });
   } catch (error) {
-    console.error('Login error:', error);
+    console.error('Google login error:', error);
+    if (error.message?.includes('Token used too late') || error.message?.includes('Invalid token')) {
+      return res.status(401).json({
+        error: 'Authentication failed',
+        message: 'Google token is invalid or expired. Please try again.',
+      });
+    }
     res.status(500).json({
       error: 'Server error',
-      message: 'An error occurred during login',
+      message: 'An error occurred during Google authentication',
     });
   }
 };
 
-// Logout (client-side token removal, optional server-side blacklist)
+// Logout (client-side token removal)
 export const logout = async (req, res) => {
-  // In a simple JWT implementation, logout is handled client-side by removing the token
-  // For more security, implement a token blacklist here
   res.json({
     success: true,
     message: 'Logged out successfully',
@@ -86,12 +126,10 @@ export const logout = async (req, res) => {
 // Verify token
 export const verifyToken = async (req, res) => {
   try {
-    // If we reached here, the token is valid (middleware verified it)
     const userId = req.user.id;
 
-    // Fetch latest user data
     const result = await query(
-      'SELECT id, email, full_name, last_login FROM admin_user WHERE id = $1',
+      'SELECT id, email, full_name, profile_picture, last_login FROM admin_user WHERE id = $1',
       [userId]
     );
 
@@ -122,7 +160,7 @@ export const getProfile = async (req, res) => {
     const userId = req.user.id;
 
     const result = await query(
-      'SELECT id, email, full_name, created_at, last_login FROM admin_user WHERE id = $1',
+      'SELECT id, email, full_name, profile_picture, created_at, last_login FROM admin_user WHERE id = $1',
       [userId]
     );
 
@@ -146,141 +184,120 @@ export const getProfile = async (req, res) => {
   }
 };
 
-// Update admin profile
-export const updateProfile = async (req, res) => {
+// Get all users (for user management)
+export const getUsers = async (req, res) => {
   try {
-    const userId = req.user.id;
-    const { full_name, email } = req.body;
-
-    // Build update query dynamically based on provided fields
-    const updates = [];
-    const values = [];
-    let paramCount = 1;
-
-    if (full_name !== undefined) {
-      updates.push(`full_name = $${paramCount}`);
-      values.push(full_name);
-      paramCount++;
-    }
-
-    if (email !== undefined) {
-      // Check if email is already taken by another user
-      const emailCheck = await query(
-        'SELECT id FROM admin_user WHERE email = $1 AND id != $2',
-        [email, userId]
-      );
-
-      if (emailCheck.rows.length > 0) {
-        return res.status(400).json({
-          error: 'Email already exists',
-          message: 'This email is already in use',
-        });
-      }
-
-      updates.push(`email = $${paramCount}`);
-      values.push(email);
-      paramCount++;
-    }
-
-    if (updates.length === 0) {
-      return res.status(400).json({
-        error: 'No updates provided',
-        message: 'Please provide at least one field to update',
-      });
-    }
-
-    updates.push(`updated_at = CURRENT_TIMESTAMP`);
-    values.push(userId);
-
-    const updateQuery = `
-      UPDATE admin_user
-      SET ${updates.join(', ')}
-      WHERE id = $${paramCount}
-      RETURNING id, email, full_name, updated_at
-    `;
-
-    const result = await query(updateQuery, values);
+    const result = await query(
+      `SELECT u.id, u.email, u.full_name, u.profile_picture, u.is_active, u.created_at, u.last_login,
+              adder.full_name AS added_by_name, adder.email AS added_by_email
+       FROM admin_user u
+       LEFT JOIN admin_user adder ON u.added_by = adder.id
+       ORDER BY u.created_at ASC`
+    );
 
     res.json({
       success: true,
-      message: 'Profile updated successfully',
-      profile: result.rows[0],
+      users: result.rows,
     });
   } catch (error) {
-    console.error('Update profile error:', error);
+    console.error('Get users error:', error);
     res.status(500).json({
       error: 'Server error',
-      message: 'An error occurred while updating profile',
+      message: 'Failed to fetch users',
     });
   }
 };
 
-// Change password
-export const changePassword = async (req, res) => {
+// Add a new allowed user (pre-registration for Google SSO)
+export const addUser = async (req, res) => {
   try {
-    const userId = req.user.id;
-    const { current_password, new_password } = req.body;
+    const { email } = req.body;
 
-    // Validation
-    if (!current_password || !new_password) {
+    if (!email) {
       return res.status(400).json({
         error: 'Validation error',
-        message: 'Current password and new password are required',
+        message: 'Email is required',
       });
     }
 
-    if (new_password.length < 6) {
+    const normalizedEmail = email.trim().toLowerCase();
+
+    // Validate against configured allowed domains
+    const allowedDomains = await getAllowedDomains();
+
+    if (!isDomainAllowed(normalizedEmail, allowedDomains)) {
+      const domainList = allowedDomains.join(', ');
       return res.status(400).json({
         error: 'Validation error',
-        message: 'New password must be at least 6 characters long',
+        message: `Only email addresses from allowed domains (${domainList}) can be added`,
       });
     }
 
-    // Get current password hash
-    const userResult = await query(
-      'SELECT password_hash FROM admin_user WHERE id = $1',
-      [userId]
+    // Check if already exists
+    const existing = await query('SELECT id FROM admin_user WHERE email = $1', [normalizedEmail]);
+    if (existing.rows.length > 0) {
+      return res.status(409).json({
+        error: 'Conflict',
+        message: 'User with this email already exists',
+      });
+    }
+
+    const addedBy = req.user.id;
+
+    const result = await query(
+      'INSERT INTO admin_user (email, added_by, is_active) VALUES ($1, $2, TRUE) RETURNING id, email, is_active, created_at',
+      [normalizedEmail, addedBy]
     );
 
-    if (userResult.rows.length === 0) {
+    res.status(201).json({
+      success: true,
+      message: 'User added successfully',
+      user: result.rows[0],
+    });
+  } catch (error) {
+    console.error('Add user error:', error);
+    res.status(500).json({
+      error: 'Server error',
+      message: 'Failed to add user',
+    });
+  }
+};
+
+// Remove a user
+export const removeUser = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const requestingUserId = req.user.id;
+
+    // Prevent self-deletion
+    if (parseInt(id) === requestingUserId) {
+      return res.status(400).json({
+        error: 'Bad request',
+        message: 'You cannot remove your own account',
+      });
+    }
+
+    const result = await query(
+      'DELETE FROM admin_user WHERE id = $1 RETURNING id, email',
+      [id]
+    );
+
+    if (result.rows.length === 0) {
       return res.status(404).json({
-        error: 'User not found',
-        message: 'Admin user does not exist',
+        error: 'Not found',
+        message: 'User not found',
       });
     }
-
-    // Verify current password
-    const isPasswordValid = await bcrypt.compare(
-      current_password,
-      userResult.rows[0].password_hash
-    );
-
-    if (!isPasswordValid) {
-      return res.status(401).json({
-        error: 'Authentication failed',
-        message: 'Current password is incorrect',
-      });
-    }
-
-    // Hash new password
-    const saltRounds = 10;
-    const newPasswordHash = await bcrypt.hash(new_password, saltRounds);
-
-    // Update password
-    await query(
-      'UPDATE admin_user SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-      [newPasswordHash, userId]
-    );
 
     res.json({
       success: true,
-      message: 'Password changed successfully',
+      message: 'User removed successfully',
     });
   } catch (error) {
-    console.error('Change password error:', error);
+    console.error('Remove user error:', error);
     res.status(500).json({
       error: 'Server error',
-      message: 'An error occurred while changing password',
+      message: 'Failed to remove user',
     });
   }
 };

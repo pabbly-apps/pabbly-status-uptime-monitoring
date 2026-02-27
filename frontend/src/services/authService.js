@@ -1,15 +1,13 @@
 import api from './api';
 
-// Login
-export const login = async (email, password) => {
-  const response = await api.post('/auth/login', { email, password });
+// Google SSO Login
+export const googleLogin = async (credential) => {
+  const response = await api.post('/auth/google-login', { credential });
 
   if (response.data.success && response.data.token) {
     localStorage.setItem('token', response.data.token);
-    // Backend returns 'admin' field, not 'user'
-    const userData = response.data.admin || response.data.user;
-    if (userData) {
-      localStorage.setItem('user', JSON.stringify(userData));
+    if (response.data.user) {
+      localStorage.setItem('user', JSON.stringify(response.data.user));
     }
   }
 
@@ -25,6 +23,10 @@ export const logout = async () => {
   } finally {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
+    // Disable Google auto-select on logout
+    if (window.google?.accounts?.id) {
+      window.google.accounts.id.disableAutoSelect();
+    }
   }
 };
 
@@ -37,21 +39,6 @@ export const verifyToken = async () => {
 // Get profile
 export const getProfile = async () => {
   const response = await api.get('/auth/profile');
-  return response.data;
-};
-
-// Update profile
-export const updateProfile = async (data) => {
-  const response = await api.put('/auth/profile', data);
-  return response.data;
-};
-
-// Change password
-export const changePassword = async (currentPassword, newPassword) => {
-  const response = await api.put('/auth/change-password', {
-    current_password: currentPassword,
-    new_password: newPassword,
-  });
   return response.data;
 };
 
@@ -74,13 +61,30 @@ export const getCurrentUser = () => {
   }
 };
 
+// User Management
+export const getUsers = async () => {
+  const response = await api.get('/auth/users');
+  return response.data;
+};
+
+export const addUser = async (email) => {
+  const response = await api.post('/auth/users', { email });
+  return response.data;
+};
+
+export const removeUser = async (id) => {
+  const response = await api.delete(`/auth/users/${id}`);
+  return response.data;
+};
+
 export default {
-  login,
+  googleLogin,
   logout,
   verifyToken,
   getProfile,
-  updateProfile,
-  changePassword,
   isAuthenticated,
   getCurrentUser,
+  getUsers,
+  addUser,
+  removeUser,
 };

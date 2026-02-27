@@ -1,24 +1,28 @@
 import express from 'express';
 import {
-  login,
+  googleLogin,
   logout,
   verifyToken,
   getProfile,
-  updateProfile,
-  changePassword,
+  getUsers,
+  addUser,
+  removeUser,
 } from '../controllers/authController.js';
 import { authenticateToken } from '../middleware/auth.js';
 
 const router = express.Router();
 
 // Public routes (no authentication required)
-router.post('/login', login);
+router.post('/google-login', googleLogin);
 router.post('/logout', logout);
 
 // Protected routes (authentication required)
 router.get('/verify', authenticateToken, verifyToken);
 router.get('/profile', authenticateToken, getProfile);
-router.put('/profile', authenticateToken, updateProfile);
-router.put('/change-password', authenticateToken, changePassword);
+
+// User management (protected)
+router.get('/users', authenticateToken, getUsers);
+router.post('/users', authenticateToken, addUser);
+router.delete('/users/:id', authenticateToken, removeUser);
 
 export default router;

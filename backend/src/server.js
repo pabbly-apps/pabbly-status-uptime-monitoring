@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import pool from './config/database.js';
+import { query } from './config/database.js';
 import { startMonitoring } from './services/monitorService.js';
 import { startUptimeCalculations } from './services/uptimeService.js';
 
@@ -90,11 +91,30 @@ app.use((err, req, res, next) => {
 });
 
 // Start server
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`\n🚀 Server running on port ${PORT}`);
   console.log(`📍 API: http://localhost:${PORT}/api`);
   console.log(`💚 Health check: http://localhost:${PORT}/health`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}\n`);
+
+  // Seed default admin if no users exist
+  try {
+    const userCount = await query('SELECT COUNT(*) as count FROM admin_user');
+    if (parseInt(userCount.rows[0].count) === 0) {
+      const adminEmail = process.env.ADMIN_EMAIL;
+      if (adminEmail) {
+        await query(
+          'INSERT INTO admin_user (email, full_name, is_active) VALUES ($1, $2, TRUE) ON CONFLICT (email) DO NOTHING',
+          [adminEmail.trim().toLowerCase(), 'Admin']
+        );
+        console.log(`✅ Default admin created: ${adminEmail}`);
+      } else {
+        console.warn('⚠️  No users found and ADMIN_EMAIL is not set in .env. No one will be able to login.');
+      }
+    }
+  } catch (error) {
+    console.error('Failed to seed default admin:', error.message);
+  }
 
   // Start background services
   console.log('═══════════════════════════════════════════════════');
