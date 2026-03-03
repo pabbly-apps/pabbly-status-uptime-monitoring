@@ -13,6 +13,11 @@ const pool = new Pool({
   connectionTimeoutMillis: 2000, // Return an error after 2 seconds if connection could not be established
 });
 
+// Ensure all connections use UTC session timezone for consistent TIMESTAMP handling
+pool.on('connect', (client) => {
+  client.query("SET timezone = 'UTC'");
+});
+
 // Handle pool errors (keep this - critical for crash prevention)
 pool.on('error', (err) => {
   console.error('❌ Database pool error', err);
