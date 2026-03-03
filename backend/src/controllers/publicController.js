@@ -477,15 +477,17 @@ export const getAggregatedPingLogs = async (req, res) => {
     }
 
     // Query with timezone-aware time bucketing
+    // Double AT TIME ZONE: first declares pinged_at as UTC, then converts to user's local tz
+    // This ensures DATE_TRUNC aligns hour/day boundaries with the user's local clock
     const result = await query(
       `SELECT
-        DATE_TRUNC($1, pinged_at AT TIME ZONE $3) as time_bucket,
+        DATE_TRUNC($1, (pinged_at AT TIME ZONE 'UTC') AT TIME ZONE $3) as time_bucket,
         COUNT(*) as total_pings,
         COUNT(*) FILTER (WHERE status = 'success') as successful_pings,
         COUNT(*) FILTER (WHERE status IN ('failure', 'timeout')) as failed_pings,
         AVG(response_time) as avg_response_time,
-        ((DATE_TRUNC($1, pinged_at AT TIME ZONE $3)::timestamp) AT TIME ZONE $3) as bucket_start,
-        ((DATE_TRUNC($1, pinged_at AT TIME ZONE $3)::timestamp + INTERVAL '1 ${interval}') AT TIME ZONE $3) as bucket_end,
+        (DATE_TRUNC($1, (pinged_at AT TIME ZONE 'UTC') AT TIME ZONE $3)) AT TIME ZONE $3 as bucket_start,
+        (DATE_TRUNC($1, (pinged_at AT TIME ZONE 'UTC') AT TIME ZONE $3) + INTERVAL '1 ${interval}') AT TIME ZONE $3 as bucket_end,
         ROUND(
           (COUNT(*) FILTER (WHERE status = 'success')::numeric / COUNT(*)::numeric) * 100,
           2
@@ -493,7 +495,7 @@ export const getAggregatedPingLogs = async (req, res) => {
       FROM ping_logs
       WHERE api_id = $2
         AND pinged_at >= NOW() - INTERVAL '${days} days'
-      GROUP BY DATE_TRUNC($1, pinged_at AT TIME ZONE $3)
+      GROUP BY DATE_TRUNC($1, (pinged_at AT TIME ZONE 'UTC') AT TIME ZONE $3)
       ORDER BY time_bucket ASC`,
       [interval, apiId, userTimezone]
     );
@@ -538,8 +540,8 @@ export const getDrillDownPingLogs = async (req, res) => {
         pinged_at
       FROM ping_logs
       WHERE api_id = $1
-        AND pinged_at >= $2::timestamptz
-        AND pinged_at < $3::timestamptz
+        AND pinged_at >= ($2::timestamptz AT TIME ZONE 'UTC')
+        AND pinged_at < ($3::timestamptz AT TIME ZONE 'UTC')
       ORDER BY pinged_at ASC`,
       [apiId, start, end]
     );

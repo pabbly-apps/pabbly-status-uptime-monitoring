@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.5.1] - 2026-03-03
+
+### Fixed
+
+#### Hourly Aggregation Stats Mismatch with Drill-Down View
+
+Fixed a timezone handling bug where the 7-day ping history hourly bars showed incorrect success/failure counts (e.g., "Failed: 0") while the minute-level drill-down for the same hour showed the correct stats (e.g., "Failed: 5").
+
+**Root Cause:**
+The `AT TIME ZONE` conversion on the `TIMESTAMP` column (`pinged_at`) was incorrect. Using a single `AT TIME ZONE` declared the UTC timestamp as the user's local timezone instead of converting it. Additionally, `DATE_TRUNC('hour')` operated on UTC timestamptz values, splitting non-whole-hour offset timezones (like IST UTC+5:30) at the :30 minute mark instead of aligning with local hour boundaries.
+
+**Files Changed:**
+- `backend/src/config/database.js` — Added explicit `SET timezone = 'UTC'` on all pool connections for consistent TIMESTAMP handling
+- `backend/src/controllers/publicController.js` — Fixed `getAggregatedPingLogs()` to use double `AT TIME ZONE` pattern for correct local hour/day bucketing; fixed `getDrillDownPingLogs()` to explicitly convert timestamps to UTC for comparison
+
+**Fix Details:**
+- Changed `DATE_TRUNC($1, pinged_at AT TIME ZONE $3)` → `DATE_TRUNC($1, (pinged_at AT TIME ZONE 'UTC') AT TIME ZONE $3)` ensuring hour/day boundaries align with the user's local clock
+- Changed drill-down comparison from `pinged_at >= $2::timestamptz` → `pinged_at >= ($2::timestamptz AT TIME ZONE 'UTC')` ensuring the drill-down fetches the exact same pings the aggregation counted
+- Aggregated stats and drill-down stats now always match for the same time period
+
+---
+
 ## [1.5.0] - 2026-02-27
 
 ### Added
