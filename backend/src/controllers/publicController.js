@@ -40,7 +40,7 @@ export const getOverallStatus = async (req, res) => {
     `);
 
     // Get system settings for branding
-    const settings = await query('SELECT * FROM system_settings WHERE id = 1');
+    const settings = await query('SELECT id, page_title, logo_url, brand_color, custom_message, admin_timezone FROM system_settings WHERE id = 1');
 
     // Calculate overall system status
     let overallStatus = 'operational';

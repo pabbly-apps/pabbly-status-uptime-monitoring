@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.5.2] - 2026-04-04
+
+### Security
+
+#### Fix Sensitive Data Exposure in API Endpoints
+
+Fixed multiple security vulnerabilities where API endpoints were leaking sensitive configuration data including SMTP credentials, webhook URLs, and internal email addresses.
+
+**Vulnerabilities Fixed:**
+
+1. **Public Status API Leaking All Settings (Critical)** — `GET /api/public/status` returned the full `system_settings` row via `SELECT *`, exposing SMTP password, webhook URLs, notification emails, and other secrets to unauthenticated users.
+
+2. **Admin Settings API Leaking SMTP Password (Critical)** — `GET /api/admin/settings` returned `smtp_pass` in plaintext. Now masked with `••••••••••••••••` (matching the existing `getEmailSettings` behavior).
+
+3. **Dashboard Stats API Leaking All Settings (Critical)** — `GET /api/admin/dashboard-stats` also used `SELECT *` on `system_settings`, exposing the same sensitive data.
+
+4. **`SELECT *` Replaced with Explicit Columns (High)** — All `SELECT *` queries across admin endpoints replaced with explicit column lists to prevent future data leaks if new sensitive columns are added.
+
+5. **SVG Upload XSS (Medium)** — Uploaded SVG files are now sanitized to strip `<script>` tags, `on*` event handlers, and `javascript:` hrefs.
+
+6. **SSRF via API URL (Low)** — API URL validation now blocks internal/private network addresses (`localhost`, `127.0.0.1`, `10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`, `169.254.x.x`).
+
+**Files Changed:**
+- `backend/src/controllers/publicController.js` — `getOverallStatus()` now selects only branding fields from settings
+- `backend/src/controllers/adminController.js` — Masked `smtp_pass` in `getSettings()`, replaced all `SELECT *` with explicit columns, added `isInternalUrl()` validation for API URLs, added SVG sanitization on logo upload
+- `backend/src/config/upload.js` — Added `sanitizeSVG()` function to strip dangerous SVG content
+- `backend/package.json` — Version bump to 1.5.2
+
+---
+
 ## [1.5.1] - 2026-03-03
 
 ### Fixed

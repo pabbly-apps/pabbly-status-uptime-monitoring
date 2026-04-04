@@ -3,6 +3,22 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 
+// Sanitize SVG content by removing script tags, event handlers, and other dangerous elements
+export const sanitizeSVG = (filePath) => {
+  const content = fs.readFileSync(filePath, 'utf8');
+  const sanitized = content
+    // Remove <script> tags and their content
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    // Remove on* event handlers (onclick, onerror, onload, etc.)
+    .replace(/\s+on\w+\s*=\s*["'][^"']*["']/gi, '')
+    .replace(/\s+on\w+\s*=\s*[^\s>]+/gi, '')
+    // Remove href="javascript:..." attributes
+    .replace(/href\s*=\s*["']javascript:[^"']*["']/gi, 'href="#"')
+    // Remove xlink:href="javascript:..." attributes
+    .replace(/xlink:href\s*=\s*["']javascript:[^"']*["']/gi, 'xlink:href="#"');
+  fs.writeFileSync(filePath, sanitized, 'utf8');
+};
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 

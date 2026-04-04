@@ -1,11 +1,39 @@
 import { query, getClient } from '../config/database.js';
 import { testWebhook as testWebhookService } from '../services/webhookService.js';
+import { sanitizeSVG } from '../config/upload.js';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+// Validate that a URL does not point to internal/private networks
+const isInternalUrl = (urlString) => {
+  try {
+    const parsed = new URL(urlString);
+    const hostname = parsed.hostname.toLowerCase();
+
+    // Block localhost variants
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '0.0.0.0') {
+      return true;
+    }
+
+    // Block private IP ranges (10.x, 172.16-31.x, 192.168.x, 169.254.x)
+    const parts = hostname.split('.').map(Number);
+    if (parts.length === 4 && parts.every(p => !isNaN(p))) {
+      if (parts[0] === 10) return true;
+      if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
+      if (parts[0] === 192 && parts[1] === 168) return true;
+      if (parts[0] === 169 && parts[1] === 254) return true;
+      if (parts[0] === 0) return true;
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+};
 
 // ============================================
 // API MANAGEMENT
@@ -16,7 +44,9 @@ export const getAllAPIs = async (req, res) => {
   try {
     const result = await query(`
       SELECT
-        a.*,
+        a.id, a.name, a.url, a.monitoring_interval, a.expected_status_code,
+        a.timeout_duration, a.is_active, a.is_public, a.display_order,
+        a.group_id, a.created_at, a.updated_at,
         g.name as group_name,
         g.display_order as group_order,
         (
@@ -65,7 +95,7 @@ export const getAPIById = async (req, res) => {
     const { id } = req.params;
 
     const result = await query(
-      `SELECT * FROM apis WHERE id = $1`,
+      `SELECT id, name, url, monitoring_interval, expected_status_code, timeout_duration, is_active, is_public, display_order, group_id, created_at, updated_at FROM apis WHERE id = $1`,
       [id]
     );
 
@@ -118,6 +148,14 @@ export const createAPI = async (req, res) => {
       return res.status(400).json({
         error: 'Validation error',
         message: 'Invalid URL format',
+      });
+    }
+
+    // Block internal/private network URLs
+    if (isInternalUrl(url)) {
+      return res.status(400).json({
+        error: 'Validation error',
+        message: 'URLs pointing to internal or private networks are not allowed',
       });
     }
 
@@ -196,6 +234,13 @@ export const updateAPI = async (req, res) => {
         return res.status(400).json({
           error: 'Validation error',
           message: 'Invalid URL format',
+        });
+      }
+      // Block internal/private network URLs
+      if (isInternalUrl(url)) {
+        return res.status(400).json({
+          error: 'Validation error',
+          message: 'URLs pointing to internal or private networks are not allowed',
         });
       }
       updates.push(`url = $${paramCount}`);
@@ -348,8 +393,8 @@ export const getDashboardStats = async (req, res) => {
       WHERE status != 'resolved'
     `);
 
-    // System settings (for logo and branding)
-    const settings = await query('SELECT * FROM system_settings WHERE id = 1');
+    // System settings (for logo and branding - only safe fields)
+    const settings = await query('SELECT id, page_title, logo_url, brand_color, custom_message, admin_timezone FROM system_settings WHERE id = 1');
 
     res.json({
       success: true,
@@ -382,7 +427,8 @@ export const getPingLogs = async (req, res) => {
     const { limit = 100, offset = 0 } = req.query;
 
     const result = await query(
-      `SELECT * FROM ping_logs
+      `SELECT id, api_id, status, status_code, response_time, error_message, response_body, response_headers, pinged_at
+       FROM ping_logs
        WHERE api_id = $1
        ORDER BY pinged_at DESC
        LIMIT $2 OFFSET $3`,
@@ -414,7 +460,8 @@ export const getAPIAnalytics = async (req, res) => {
 
     // Get uptime summaries
     const uptimeSummaries = await query(
-      `SELECT * FROM uptime_summaries
+      `SELECT id, api_id, period, uptime_percentage, total_pings, successful_pings, failed_pings, avg_response_time, calculated_at
+       FROM uptime_summaries
        WHERE api_id = $1
        ORDER BY period`,
       [apiId]
@@ -647,9 +694,14 @@ export const getSettings = async (req, res) => {
   try {
     const result = await query('SELECT * FROM system_settings WHERE id = 1');
 
+    const settings = result.rows[0] || {};
+    if (settings.smtp_pass) {
+      settings.smtp_pass = '••••••••••••••••';
+    }
+
     res.json({
       success: true,
-      settings: result.rows[0] || {},
+      settings,
     });
   } catch (error) {
     console.error('Get settings error:', error);
@@ -803,6 +855,11 @@ export const uploadLogo = async (req, res) => {
         error: 'No file uploaded',
         message: 'Please select a logo file to upload',
       });
+    }
+
+    // Sanitize SVG files to remove script tags and event handlers
+    if (req.file.mimetype === 'image/svg+xml') {
+      sanitizeSVG(req.file.path);
     }
 
     // Construct the URL path for the uploaded file
@@ -1134,7 +1191,7 @@ export const getWebhookLogs = async (req, res) => {
   try {
     const { limit = 50, offset = 0, apiId } = req.query;
 
-    let queryText = 'SELECT * FROM webhook_logs';
+    let queryText = 'SELECT id, webhook_url, event_type, api_id, incident_id, payload, status_code, success, error_message, response_time, created_at FROM webhook_logs';
     const values = [];
     let paramCount = 1;
 
@@ -1310,7 +1367,7 @@ export const getAPIGroup = async (req, res) => {
 
     // Get group details
     const groupResult = await query(
-      'SELECT * FROM api_groups WHERE id = $1',
+      'SELECT id, name, description, display_order, is_collapsed, is_default, created_at, updated_at FROM api_groups WHERE id = $1',
       [id]
     );
 
@@ -1323,7 +1380,7 @@ export const getAPIGroup = async (req, res) => {
 
     // Get APIs in this group
     const apisResult = await query(
-      'SELECT * FROM apis WHERE group_id = $1 ORDER BY display_order ASC, id ASC',
+      'SELECT id, name, url, monitoring_interval, expected_status_code, timeout_duration, is_active, is_public, display_order, group_id, created_at, updated_at FROM apis WHERE group_id = $1 ORDER BY display_order ASC, id ASC',
       [id]
     );
 
