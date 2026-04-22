@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS system_settings (
   notifications_enabled BOOLEAN DEFAULT FALSE,
   webhook_url TEXT,
   webhook_enabled BOOLEAN DEFAULT FALSE,
+  webhook_secret TEXT, -- HMAC-SHA256 secret for signing outgoing webhooks
   google_chat_webhook_url TEXT,
   google_chat_webhook_enabled BOOLEAN DEFAULT FALSE,
   admin_timezone VARCHAR(50) DEFAULT 'UTC',
