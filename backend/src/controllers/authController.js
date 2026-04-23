@@ -220,6 +220,20 @@ export const addUser = async (req, res) => {
       });
     }
 
+    if (typeof email !== 'string' || email.length > 254) {
+      return res.status(400).json({
+        error: 'Validation error',
+        message: 'Email must be 254 characters or less',
+      });
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      return res.status(400).json({
+        error: 'Validation error',
+        message: 'Invalid email format',
+      });
+    }
+
     const normalizedEmail = email.trim().toLowerCase();
 
     // Validate against configured allowed domains
