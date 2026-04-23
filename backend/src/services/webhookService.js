@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import pool from '../config/database.js';
 import { formatWithTimezone } from '../utils/timezone.js';
 
@@ -5,6 +6,34 @@ import { formatWithTimezone } from '../utils/timezone.js';
  * Webhook Service
  * Handles sending webhooks for API status changes and logging delivery attempts
  */
+
+/**
+ * Get or generate the webhook signing secret.
+ * Auto-generates a 32-byte hex secret on first use and stores it in system_settings.
+ * @returns {Promise<string>} The webhook secret
+ */
+async function getWebhookSecret() {
+  const result = await pool.query('SELECT webhook_secret FROM system_settings WHERE id = 1');
+  const existing = result.rows[0]?.webhook_secret;
+  if (existing) return existing;
+
+  // Generate and persist a new secret
+  const secret = crypto.randomBytes(32).toString('hex');
+  await pool.query('UPDATE system_settings SET webhook_secret = $1 WHERE id = 1', [secret]);
+  return secret;
+}
+
+/**
+ * Sign a webhook payload with HMAC-SHA256.
+ * @param {string} body - The JSON string payload
+ * @param {string} secret - The webhook secret
+ * @param {number} timestamp - Unix timestamp (seconds)
+ * @returns {string} The HMAC hex signature
+ */
+function signPayload(body, secret, timestamp) {
+  // Sign "timestamp.body" to prevent replay attacks
+  return crypto.createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex');
+}
 
 /**
  * Build consistent webhook payload structure
@@ -125,6 +154,12 @@ export async function sendWebhook(eventType, api, incident, currentStatusCode = 
 
       // Build payload
       const payload = buildWebhookPayload(eventType, api, incident, currentStatusCode, timezone);
+      const body = JSON.stringify(payload);
+
+      // Generate HMAC signature
+      const secret = await getWebhookSecret();
+      const timestamp = Math.floor(Date.now() / 1000);
+      const signature = signPayload(body, secret, timestamp);
 
       // Send webhook with 10-second timeout
       const controller = new AbortController();
@@ -134,9 +169,11 @@ export async function sendWebhook(eventType, api, incident, currentStatusCode = 
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'User-Agent': 'Pabbly-Status-Monitor/1.0'
+          'User-Agent': 'Pabbly-Status-Monitor/1.0',
+          'X-Webhook-Signature': `sha256=${signature}`,
+          'X-Webhook-Timestamp': String(timestamp)
         },
-        body: JSON.stringify(payload),
+        body,
         signal: controller.signal
       });
 
@@ -256,6 +293,12 @@ export async function testWebhook() {
       }
     };
 
+    // Generate HMAC signature
+    const body = JSON.stringify(testPayload);
+    const secret = await getWebhookSecret();
+    const timestamp = Math.floor(Date.now() / 1000);
+    const signature = signPayload(body, secret, timestamp);
+
     // Send test webhook with 10-second timeout
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000);
@@ -264,9 +307,11 @@ export async function testWebhook() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'User-Agent': 'Pabbly-Status-Monitor/1.0'
+        'User-Agent': 'Pabbly-Status-Monitor/1.0',
+        'X-Webhook-Signature': `sha256=${signature}`,
+        'X-Webhook-Timestamp': String(timestamp)
       },
-      body: JSON.stringify(testPayload),
+      body,
       signal: controller.signal
     });
 

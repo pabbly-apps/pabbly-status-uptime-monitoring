@@ -1,5 +1,7 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -19,6 +21,10 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Middleware
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+}));
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:5173',
   credentials: true,
@@ -26,8 +32,13 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve uploaded files statically
-app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+// Serve uploaded files statically with security headers
+app.use('/uploads', express.static(path.join(__dirname, '../uploads'), {
+  setHeaders: (res) => {
+    res.set('X-Content-Type-Options', 'nosniff');
+    res.set('Cache-Control', 'public, max-age=86400');
+  }
+}));
 
 
 // Health check endpoint
@@ -45,7 +56,7 @@ app.get('/health', async (req, res) => {
       status: 'unhealthy',
       timestamp: new Date().toISOString(),
       database: 'disconnected',
-      error: error.message,
+      error: 'Database connection failed',
     });
   }
 });
@@ -63,15 +74,40 @@ app.get('/api', (req, res) => {
   });
 });
 
+// Rate limiters (per-route-group, calculated from frontend auto-refresh patterns)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests', message: 'Too many login attempts. Please try again later.' },
+});
+
+const adminLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests', message: 'Rate limit exceeded. Please slow down.' },
+});
+
+const publicLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 500,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests', message: 'Rate limit exceeded. Please try again later.' },
+});
+
 // Import routes
 import authRoutes from './routes/auth.js';
 import adminRoutes from './routes/admin.js';
 import publicRoutes from './routes/public.js';
 
-// Use routes
-app.use('/api/auth', authRoutes);
-app.use('/api/admin', adminRoutes);
-app.use('/api/public', publicRoutes);
+// Use routes (with rate limiters)
+app.use('/api/auth', authLimiter, authRoutes);
+app.use('/api/admin', adminLimiter, adminRoutes);
+app.use('/api/public', publicLimiter, publicRoutes);
 
 // 404 handler
 app.use((req, res) => {

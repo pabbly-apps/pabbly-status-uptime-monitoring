@@ -1,12 +1,39 @@
 import { query, getClient } from '../config/database.js';
 import { testWebhook as testWebhookService } from '../services/webhookService.js';
 import { sanitizeSVG } from '../config/upload.js';
+import { encrypt } from '../utils/encryption.js';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+// Input validation helpers
+const MAX_LENGTHS = {
+  name: 500, url: 2048, group_name: 500, page_title: 500,
+  custom_message: 5000, webhook_url: 2048, smtp_host: 255,
+  smtp_user: 254, smtp_from: 500, smtp_recipients: 2000,
+  allowed_domains: 2000, brand_color: 20, incident_title: 500,
+  incident_description: 10000, email: 254, description: 5000,
+};
+
+function validateString(value, fieldName, maxKey) {
+  if (typeof value !== 'string') return `${fieldName} must be a string`;
+  if (value.length > MAX_LENGTHS[maxKey]) return `${fieldName} must be ${MAX_LENGTHS[maxKey]} characters or less`;
+  return null;
+}
+
+function validateNumber(value, fieldName, min, max) {
+  const num = Number(value);
+  if (isNaN(num) || !Number.isFinite(num)) return `${fieldName} must be a valid number`;
+  if (num < min || num > max) return `${fieldName} must be between ${min} and ${max}`;
+  return null;
+}
+
+function validationError(res, message) {
+  return res.status(400).json({ error: 'Validation error', message });
+}
 
 // Validate that a URL does not point to internal/private networks
 const isInternalUrl = (urlString) => {
@@ -141,6 +168,13 @@ export const createAPI = async (req, res) => {
       });
     }
 
+    let err;
+    if ((err = validateString(name, 'Name', 'name'))) return validationError(res, err);
+    if ((err = validateString(url, 'URL', 'url'))) return validationError(res, err);
+    if ((err = validateNumber(monitoring_interval, 'Monitoring interval', 10, 3600))) return validationError(res, err);
+    if ((err = validateNumber(expected_status_code, 'Expected status code', 100, 599))) return validationError(res, err);
+    if ((err = validateNumber(timeout_duration, 'Timeout duration', 1000, 120000))) return validationError(res, err);
+
     // Validate URL format
     try {
       new URL(url);
@@ -214,6 +248,14 @@ export const updateAPI = async (req, res) => {
         message: 'API not found',
       });
     }
+
+    // Validate provided fields
+    let err;
+    if (name !== undefined && (err = validateString(name, 'Name', 'name'))) return validationError(res, err);
+    if (url !== undefined && (err = validateString(url, 'URL', 'url'))) return validationError(res, err);
+    if (monitoring_interval !== undefined && (err = validateNumber(monitoring_interval, 'Monitoring interval', 10, 3600))) return validationError(res, err);
+    if (expected_status_code !== undefined && (err = validateNumber(expected_status_code, 'Expected status code', 100, 599))) return validationError(res, err);
+    if (timeout_duration !== undefined && (err = validateNumber(timeout_duration, 'Timeout duration', 1000, 120000))) return validationError(res, err);
 
     // Build update query dynamically
     const updates = [];
@@ -563,6 +605,10 @@ export const createIncident = async (req, res) => {
       });
     }
 
+    let err;
+    if ((err = validateString(title, 'Title', 'incident_title'))) return validationError(res, err);
+    if (description !== undefined && description !== null && (err = validateString(description, 'Description', 'incident_description'))) return validationError(res, err);
+
     const result = await query(
       `INSERT INTO incidents (api_id, title, description, status, started_at)
        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
@@ -588,6 +634,10 @@ export const updateIncident = async (req, res) => {
   try {
     const { id } = req.params;
     const { title, description, status } = req.body;
+
+    let err;
+    if (title !== undefined && title !== null && (err = validateString(title, 'Title', 'incident_title'))) return validationError(res, err);
+    if (description !== undefined && description !== null && (err = validateString(description, 'Description', 'incident_description'))) return validationError(res, err);
 
     const updates = [];
     const values = [];
@@ -729,6 +779,17 @@ export const updateSettings = async (req, res) => {
       admin_timezone,
       allowed_domains,
     } = req.body;
+
+    // Validate provided fields
+    let err;
+    if (page_title !== undefined && (err = validateString(page_title, 'Page title', 'page_title'))) return validationError(res, err);
+    if (custom_message !== undefined && custom_message !== null && (err = validateString(custom_message, 'Custom message', 'custom_message'))) return validationError(res, err);
+    if (brand_color !== undefined && (err = validateString(brand_color, 'Brand color', 'brand_color'))) return validationError(res, err);
+    if (webhook_url !== undefined && webhook_url !== null && (err = validateString(webhook_url, 'Webhook URL', 'webhook_url'))) return validationError(res, err);
+    if (google_chat_webhook_url !== undefined && google_chat_webhook_url !== null && (err = validateString(google_chat_webhook_url, 'Google Chat webhook URL', 'webhook_url'))) return validationError(res, err);
+    if (notification_email !== undefined && notification_email !== null && (err = validateString(notification_email, 'Notification email', 'email'))) return validationError(res, err);
+    if (allowed_domains !== undefined && (err = validateString(allowed_domains, 'Allowed domains', 'allowed_domains'))) return validationError(res, err);
+    if (data_retention_days !== undefined && (err = validateNumber(data_retention_days, 'Data retention days', 1, 365))) return validationError(res, err);
 
     const updates = [];
     const values = [];
@@ -949,6 +1010,14 @@ export const updateEmailSettings = async (req, res) => {
   try {
     const { smtp_host, smtp_port, smtp_user, smtp_pass, smtp_from, smtp_recipients } = req.body;
 
+    // Validate provided fields
+    let err;
+    if (smtp_host !== undefined && smtp_host !== null && (err = validateString(smtp_host, 'SMTP host', 'smtp_host'))) return validationError(res, err);
+    if (smtp_user !== undefined && smtp_user !== null && (err = validateString(smtp_user, 'SMTP user', 'smtp_user'))) return validationError(res, err);
+    if (smtp_from !== undefined && smtp_from !== null && (err = validateString(smtp_from, 'SMTP from', 'smtp_from'))) return validationError(res, err);
+    if (smtp_recipients !== undefined && smtp_recipients !== null && (err = validateString(smtp_recipients, 'SMTP recipients', 'smtp_recipients'))) return validationError(res, err);
+    if (smtp_port !== undefined && (err = validateNumber(smtp_port, 'SMTP port', 1, 65535))) return validationError(res, err);
+
     // Build the UPDATE query dynamically based on whether password is being updated
     let updateQuery;
     let values;
@@ -968,7 +1037,8 @@ export const updateEmailSettings = async (req, res) => {
       `;
       values = [smtp_host, smtp_port, smtp_user, smtp_from, smtp_recipients];
     } else {
-      // Update all fields including password
+      // Update all fields including password (encrypt if ENCRYPTION_KEY is set)
+      const encryptedPass = encrypt(smtp_pass);
       updateQuery = `
         UPDATE system_settings
         SET smtp_host = $1,
@@ -981,7 +1051,7 @@ export const updateEmailSettings = async (req, res) => {
         WHERE id = 1
         RETURNING *
       `;
-      values = [smtp_host, smtp_port, smtp_user, smtp_pass, smtp_from, smtp_recipients];
+      values = [smtp_host, smtp_port, smtp_user, encryptedPass, smtp_from, smtp_recipients];
     }
 
     await query(updateQuery, values);
@@ -1413,6 +1483,10 @@ export const createAPIGroup = async (req, res) => {
       });
     }
 
+    let err;
+    if ((err = validateString(name, 'Group name', 'group_name'))) return validationError(res, err);
+    if (description !== undefined && description !== null && (err = validateString(description, 'Description', 'description'))) return validationError(res, err);
+
     // Check for duplicate name
     const existingGroup = await query(
       'SELECT id FROM api_groups WHERE name = $1',
@@ -1482,6 +1556,10 @@ export const updateAPIGroup = async (req, res) => {
         message: 'Group name is required',
       });
     }
+
+    let err;
+    if ((err = validateString(name, 'Group name', 'group_name'))) return validationError(res, err);
+    if (description !== undefined && description !== null && (err = validateString(description, 'Description', 'description'))) return validationError(res, err);
 
     // Check for duplicate name (excluding current group)
     const existingGroup = await query(
