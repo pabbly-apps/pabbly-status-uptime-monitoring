@@ -1,5 +1,6 @@
 import { createTransport } from 'nodemailer';
 import { query } from '../config/database.js';
+import { decrypt } from '../utils/encryption.js';
 import { formatWithTimezone, getAdminTimezone } from '../utils/timezone.js';
 
 /**
@@ -21,6 +22,9 @@ async function getSMTPSettings() {
     if (!settings.smtp_host || !settings.smtp_user) {
       return null;
     }
+
+    // Decrypt SMTP password (returns as-is if plaintext, null if decryption fails)
+    settings.smtp_pass = decrypt(settings.smtp_pass);
 
     return settings;
   } catch (error) {
