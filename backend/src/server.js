@@ -20,6 +20,12 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Trust only the local reverse proxy (nginx on loopback). Required so
+// express-rate-limit reads the real client IP from X-Forwarded-For. Using
+// 'loopback' (not a hop count) means a direct hit to the app port with a
+// spoofed X-Forwarded-For is ignored, so rate limiting can't be bypassed.
+app.set('trust proxy', 'loopback');
+
 // Middleware
 app.use(helmet({
   contentSecurityPolicy: false,

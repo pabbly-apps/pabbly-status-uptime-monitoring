@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.6.1] - 2026-07-18
+
+### Fixed
+
+#### Rate Limiter Trust Proxy Configuration
+
+Fixed `express-rate-limit` throwing `ERR_ERL_UNEXPECTED_X_FORWARDED_FOR` on every proxied request. The backend runs behind a local nginx reverse proxy (which sets `X-Forwarded-For`), but Express `trust proxy` was left at its default (`false`), so the limiter could not derive the real client IP.
+
+**Files Changed:**
+- `backend/src/server.js` — Added `app.set('trust proxy', 'loopback')`
+- `backend/package.json` — Version bump to 1.6.1
+
+**Why `'loopback'`:** nginx is the only proxy and connects from localhost. Trusting only loopback (rather than a hop count like `1`) means a direct connection to the app port carrying a spoofed `X-Forwarded-For` is ignored, so the rate limiter keys on the true client IP and cannot be bypassed.
+
+---
+
 ## [1.6.0] - 2026-07-17
 
 ### Added
