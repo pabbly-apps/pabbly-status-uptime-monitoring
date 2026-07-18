@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.6.0] - 2026-07-17
+
+### Added
+
+#### Per-API Retry, Backoff & Failure Threshold Configuration
+
+Made the monitor tolerant of transient network packet loss by adding per-API, admin-configurable retry, backoff, and failure-threshold settings. Previously these were global hardcoded constants (`FAILURE_THRESHOLD`, `CONNECTION_RETRY_COUNT`, `CONNECTION_RETRY_DELAY_MS`) in `monitorService.js`; they are now stored per-API in the database and editable directly from the Add/Edit API form.
+
+This fixes intermittent false "down" alerts for directly-exposed endpoints (e.g. Highinbox PMTA Server) that sit on lossy network paths. Packet capture proved these failures were caused by dropped TCP SYN packets on the network route — the connection never established even though the target server was healthy — rather than by the server itself. Endpoints behind Cloudflare were unaffected.
+
+**New Files:**
+- `database/migrations/008_add_monitoring_retry_config.sql` — Migration adding `retry_count`, `retry_delay_ms`, and `failure_threshold` columns to the `apis` table
+
+**Modified Files:**
+- `backend/src/services/monitorService.js` — Removed the hardcoded constants; reads all three values per-API from the row; rewrote `pingAPI()` with a real retry loop and exponential backoff; per-API failure threshold in `handleStatusChange()`; added an in-memory overlap guard that skips APIs whose previous check is still in flight
+- `backend/src/controllers/adminController.js` — Validate and persist the 3 new fields on create/update; added them to the `getAllAPIs` and `getAPIById` SELECTs so the Edit form loads current values
+- `frontend/src/components/admin/AddAPIModal.jsx` — Added "Retry Count", "Retry Delay (ms)", and "Failure Threshold" fields to the Add/Edit API form
+- `database/schema.sql` — Added the 3 columns to the base `apis` table for fresh installs
+- `backend/package.json` — Version bump to 1.6.0
+
+**How it works:**
+- Retries **only** on connection-level failures (DNS/TCP/TLS/timeout — no HTTP response). HTTP status mismatches (500/502/wrong code) surface immediately with no retry, since those are real application problems.
+- Exponential backoff between retries: `retry_delay_ms`, then ×2, ×4, … before each subsequent attempt.
+- The check reports `success` if **any** attempt succeeds, and `failure` only if the initial attempt plus all retries fail.
+- Per-API `failure_threshold` — N consecutive failed checks before an incident is raised. Transient loss now recovers on retry → success → counter resets → no false alert. A genuine outage still fails all retries for `failure_threshold` consecutive checks → incident raised.
+- Overlap guard prevents duplicate pings / duplicate `ping_logs` when a check runs longer than the monitoring interval.
+
+**Configuration (per-API, in the Admin UI):**
+| Field | Range | Default | Meaning |
+|-------|-------|---------|---------|
+| Retry Count | 0–5 | 1 | Additional retries on connection failure |
+| Retry Delay (ms) | 100–30000 | 1000 | Base backoff delay, doubles each retry |
+| Failure Threshold | 1–10 | 2 | Consecutive fails before marking DOWN |
+
+**Backward Compatibility:** The defaults (`retry_count=1`, `retry_delay_ms=1000`, `failure_threshold=2`) exactly match the previous hardcoded constants, so all existing endpoints behave identically until individually tuned.
+
+**Note:** Keep `(retry_count × timeout_duration + sum of backoffs)` below the API's interval so a check does not overlap the next monitoring cycle. The failure counter and overlap guard are in-memory and reset on server restart.
+
+**Migration Required:**
+```bash
+docker exec -i postgres psql -U postgres -d status_monitor < database/migrations/008_add_monitoring_retry_config.sql
+```
+
+---
+
 ## [1.5.2] - 2026-04-04
 
 ### Security

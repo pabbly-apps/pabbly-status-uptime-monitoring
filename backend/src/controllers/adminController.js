@@ -72,7 +72,8 @@ export const getAllAPIs = async (req, res) => {
     const result = await query(`
       SELECT
         a.id, a.name, a.url, a.monitoring_interval, a.expected_status_code,
-        a.timeout_duration, a.is_active, a.is_public, a.display_order,
+        a.timeout_duration, a.retry_count, a.retry_delay_ms, a.failure_threshold,
+        a.is_active, a.is_public, a.display_order,
         a.group_id, a.created_at, a.updated_at,
         g.name as group_name,
         g.display_order as group_order,
@@ -122,7 +123,7 @@ export const getAPIById = async (req, res) => {
     const { id } = req.params;
 
     const result = await query(
-      `SELECT id, name, url, monitoring_interval, expected_status_code, timeout_duration, is_active, is_public, display_order, group_id, created_at, updated_at FROM apis WHERE id = $1`,
+      `SELECT id, name, url, monitoring_interval, expected_status_code, timeout_duration, retry_count, retry_delay_ms, failure_threshold, is_active, is_public, display_order, group_id, created_at, updated_at FROM apis WHERE id = $1`,
       [id]
     );
 
@@ -155,6 +156,9 @@ export const createAPI = async (req, res) => {
       monitoring_interval = 60,
       expected_status_code = 200,
       timeout_duration = 30000,
+      retry_count = 1,
+      retry_delay_ms = 1000,
+      failure_threshold = 2,
       is_active = true,
       is_public = true,
       group_id,
@@ -174,6 +178,9 @@ export const createAPI = async (req, res) => {
     if ((err = validateNumber(monitoring_interval, 'Monitoring interval', 10, 3600))) return validationError(res, err);
     if ((err = validateNumber(expected_status_code, 'Expected status code', 100, 599))) return validationError(res, err);
     if ((err = validateNumber(timeout_duration, 'Timeout duration', 1000, 120000))) return validationError(res, err);
+    if ((err = validateNumber(retry_count, 'Retry count', 0, 5))) return validationError(res, err);
+    if ((err = validateNumber(retry_delay_ms, 'Retry delay', 100, 30000))) return validationError(res, err);
+    if ((err = validateNumber(failure_threshold, 'Failure threshold', 1, 10))) return validationError(res, err);
 
     // Validate URL format
     try {
@@ -205,10 +212,10 @@ export const createAPI = async (req, res) => {
     }
 
     const result = await query(
-      `INSERT INTO apis (name, url, monitoring_interval, expected_status_code, timeout_duration, is_active, is_public, group_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO apis (name, url, monitoring_interval, expected_status_code, timeout_duration, retry_count, retry_delay_ms, failure_threshold, is_active, is_public, group_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
-      [name, url, monitoring_interval, expected_status_code, timeout_duration, is_active, is_public, finalGroupId]
+      [name, url, monitoring_interval, expected_status_code, timeout_duration, retry_count, retry_delay_ms, failure_threshold, is_active, is_public, finalGroupId]
     );
 
     res.status(201).json({
@@ -235,6 +242,9 @@ export const updateAPI = async (req, res) => {
       monitoring_interval,
       expected_status_code,
       timeout_duration,
+      retry_count,
+      retry_delay_ms,
+      failure_threshold,
       is_active,
       is_public,
       group_id,
@@ -256,6 +266,9 @@ export const updateAPI = async (req, res) => {
     if (monitoring_interval !== undefined && (err = validateNumber(monitoring_interval, 'Monitoring interval', 10, 3600))) return validationError(res, err);
     if (expected_status_code !== undefined && (err = validateNumber(expected_status_code, 'Expected status code', 100, 599))) return validationError(res, err);
     if (timeout_duration !== undefined && (err = validateNumber(timeout_duration, 'Timeout duration', 1000, 120000))) return validationError(res, err);
+    if (retry_count !== undefined && (err = validateNumber(retry_count, 'Retry count', 0, 5))) return validationError(res, err);
+    if (retry_delay_ms !== undefined && (err = validateNumber(retry_delay_ms, 'Retry delay', 100, 30000))) return validationError(res, err);
+    if (failure_threshold !== undefined && (err = validateNumber(failure_threshold, 'Failure threshold', 1, 10))) return validationError(res, err);
 
     // Build update query dynamically
     const updates = [];
@@ -305,6 +318,24 @@ export const updateAPI = async (req, res) => {
     if (timeout_duration !== undefined) {
       updates.push(`timeout_duration = $${paramCount}`);
       values.push(timeout_duration);
+      paramCount++;
+    }
+
+    if (retry_count !== undefined) {
+      updates.push(`retry_count = $${paramCount}`);
+      values.push(retry_count);
+      paramCount++;
+    }
+
+    if (retry_delay_ms !== undefined) {
+      updates.push(`retry_delay_ms = $${paramCount}`);
+      values.push(retry_delay_ms);
+      paramCount++;
+    }
+
+    if (failure_threshold !== undefined) {
+      updates.push(`failure_threshold = $${paramCount}`);
+      values.push(failure_threshold);
       paramCount++;
     }
 
