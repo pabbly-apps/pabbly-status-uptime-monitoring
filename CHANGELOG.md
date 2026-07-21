@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.7.0] - 2026-07-21
+
+### Removed
+
+#### Per-API Retry / Backoff / Failure-Threshold Configuration (v1.6.0 feature)
+
+Removed the per-API retry configuration introduced in v1.6.0. It was added to tolerate transient packet loss on the directly-exposed Highinbox PMTA endpoint, but that problem is now solved at the network layer — Highinbox is monitored through a Cloudflare-proxied subdomain (`highinbox-status.pabbly.com`), so the monitor reaches a nearby Cloudflare edge instead of the lossy Germany→India path. The extra Admin form fields were no longer needed and added confusion.
+
+**Reverted to the original hardcoded behavior:** `FAILURE_THRESHOLD = 2`, `CONNECTION_RETRY_COUNT = 1`, `CONNECTION_RETRY_DELAY_MS = 1000` (single retry on connection-level failure). All endpoints behave as they did before v1.6.0.
+
+**Files Changed:**
+- `backend/src/services/monitorService.js` — Restored hardcoded constants and the original single-retry `pingAPI`; reverted `handleStatusChange` to the hardcoded threshold. **The overlap guard (skip re-pinging an in-flight check) was intentionally kept.**
+- `backend/src/controllers/adminController.js` — Removed the 3 retry fields from create/update validation, persistence, and the read SELECTs.
+- `frontend/src/components/admin/AddAPIModal.jsx` — Removed the Retry Count / Retry Delay / Failure Threshold form fields.
+- `database/schema.sql` — Removed the 3 columns from the base schema; deleted migration `008_add_monitoring_retry_config.sql`.
+- `backend/package.json` — Version bump to 1.7.0
+
+**Note:** The `retry_count`, `retry_delay_ms`, and `failure_threshold` columns are left in the existing production database (now unused/harmless); no destructive drop-migration was run.
+
+---
+
 ## [1.6.1] - 2026-07-18
 
 ### Fixed

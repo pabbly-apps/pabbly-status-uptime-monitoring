@@ -114,9 +114,6 @@ CREATE TABLE IF NOT EXISTS apis (
   monitoring_interval INTEGER DEFAULT 60, -- seconds
   expected_status_code INTEGER DEFAULT 200,
   timeout_duration INTEGER DEFAULT 30000, -- milliseconds
-  retry_count INTEGER DEFAULT 1, -- additional retries on connection-level failure
-  retry_delay_ms INTEGER DEFAULT 1000, -- base backoff delay (ms), doubles each retry
-  failure_threshold INTEGER DEFAULT 2, -- consecutive failed checks before an incident
   is_active BOOLEAN DEFAULT TRUE,
   is_public BOOLEAN DEFAULT TRUE, -- visible on public status page
   display_order INTEGER DEFAULT 0, -- for custom ordering on status page
@@ -136,9 +133,6 @@ CREATE INDEX IF NOT EXISTS idx_apis_group_id ON apis(group_id);
 COMMENT ON COLUMN apis.is_public IS 'Whether the API is visible on public status page (true) or only to logged-in admins (false)';
 COMMENT ON COLUMN apis.display_order IS 'Order in which APIs appear on the status page (lower numbers first)';
 COMMENT ON COLUMN apis.group_id IS 'Foreign key to api_groups table for organizing APIs into groups';
-COMMENT ON COLUMN apis.retry_count IS 'Additional retries on connection-level failure (0-5)';
-COMMENT ON COLUMN apis.retry_delay_ms IS 'Base backoff delay in ms, doubles each retry (100-30000)';
-COMMENT ON COLUMN apis.failure_threshold IS 'Consecutive failed checks before an incident (1-10)';
 
 
 -- ============================================================================

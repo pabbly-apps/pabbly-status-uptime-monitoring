@@ -3,14 +3,8 @@ import { Agent } from 'undici';
 import { query } from '../config/database.js';
 import { detectAndCreateIncident, autoResolveIncident } from './incidentService.js';
 
-// Per-API defaults (used only when a row is missing the value). All of these
-// are configurable per-API from the Admin UI and stored on the `apis` row:
-//   retry_count       — additional retries on connection-level failure
-//   retry_delay_ms     — base backoff delay (ms), doubles each retry
-//   failure_threshold  — consecutive failed checks before an incident
-const DEFAULT_RETRY_COUNT = 1;
-const DEFAULT_RETRY_DELAY_MS = 1000;
-const DEFAULT_FAILURE_THRESHOLD = 2;
+// Require N consecutive failures before marking an API as down
+const FAILURE_THRESHOLD = 2;
 
 /**
  * Create a fresh HTTP agent for each monitoring cycle
@@ -62,6 +56,10 @@ function truncateBody(body, maxLength = 50000) {
 
   return bodyStr;
 }
+
+// Max retries for connection-level failures (DNS, TCP, TLS timeouts)
+const CONNECTION_RETRY_COUNT = 1;
+const CONNECTION_RETRY_DELAY_MS = 1000;
 
 /**
  * Perform a single fetch attempt against an API endpoint
@@ -151,49 +149,29 @@ async function attemptPing(api, agent) {
 
 /**
  * Ping a single API endpoint with automatic retry on connection-level failures.
- *
- * Retry/backoff values are read PER-API from the row (configurable in the Admin UI):
- *   retries   = api.retry_count   ?? DEFAULT_RETRY_COUNT     (additional attempts)
- *   baseDelay = api.retry_delay_ms ?? DEFAULT_RETRY_DELAY_MS (ms, exponential)
- *
- * Only connection-level failures (isConnectionError === true — DNS/TCP/TLS/timeout,
- * i.e. no HTTP response) are retried, to absorb transient network packet loss.
- * HTTP status mismatches (e.g. 500/502/wrong code) are real app problems and return
- * IMMEDIATELY without retry. The check reports "success" if ANY attempt succeeds and
- * "failure" only if the initial attempt plus all retries fail.
- *
- * Backoff is exponential: baseDelay, baseDelay*2, baseDelay*4, ... before each retry.
- * NOTE for admins: keep (retries × timeout_duration + sum of backoffs) below the API's
- * interval so a check does not overlap the next monitoring cycle.
- *
- * @param {object} api - API object with url, timeout_duration, expected_status_code, retry_count, retry_delay_ms
+ * Retries once after a 1s delay if the failure is a connection error (no HTTP response).
+ * Does NOT retry HTTP-level failures (e.g., wrong status code).
+ * @param {object} api - API object with url, timeout_duration, expected_status_code
  * @param {Agent} agent - Undici Agent instance for this monitoring cycle
  */
 async function pingAPI(api, agent) {
-  const retries = api.retry_count ?? DEFAULT_RETRY_COUNT;
-  const baseDelay = api.retry_delay_ms ?? DEFAULT_RETRY_DELAY_MS;
+  const { result, isConnectionError } = await attemptPing(api, agent);
 
-  let attempt = 0;
-  while (true) {
-    const { result, isConnectionError } = await attemptPing(api, agent);
-
-    // Definitive result (success, or an HTTP-level failure like a wrong status
-    // code): return immediately — never retry HTTP problems.
-    if (!isConnectionError) {
-      return result;
+  // If it's a connection-level failure, retry once after a short delay
+  if (isConnectionError) {
+    for (let retry = 1; retry <= CONNECTION_RETRY_COUNT; retry++) {
+      console.log(`   ⚡ Retrying ${api.name} after connection failure (attempt ${retry + 1})...`);
+      await new Promise(resolve => setTimeout(resolve, CONNECTION_RETRY_DELAY_MS));
+      const retryAttempt = await attemptPing(api, agent);
+      if (!retryAttempt.isConnectionError) {
+        return retryAttempt.result;
+      }
+      // If retry also failed with connection error, use the retry's result
+      return retryAttempt.result;
     }
-
-    // Connection-level failure. If retries are exhausted, report the failure.
-    if (attempt >= retries) {
-      return result;
-    }
-
-    // Otherwise back off exponentially and retry.
-    const delay = baseDelay * Math.pow(2, attempt);
-    attempt++;
-    console.log(`   ⚡ Retrying ${api.name} after connection failure (attempt ${attempt + 1}/${retries + 1}, backoff ${delay}ms)...`);
-    await new Promise(resolve => setTimeout(resolve, delay));
   }
+
+  return result;
 }
 
 /**
@@ -229,9 +207,6 @@ async function handleStatusChange(api, currentStatus, statusCode = null) {
   const apiId = api.id;
   const tracking = apiLastStatus.get(apiId);
 
-  // Per-API threshold (configurable in the Admin UI); falls back to the default.
-  const failureThreshold = api.failure_threshold ?? DEFAULT_FAILURE_THRESHOLD;
-
   if (currentStatus === 'success') {
     // Reset counter on success
     apiLastStatus.set(apiId, { status: 'success', consecutiveFailures: 0 });
@@ -250,11 +225,11 @@ async function handleStatusChange(api, currentStatus, statusCode = null) {
   apiLastStatus.set(apiId, { status: currentStatus, consecutiveFailures: newFailures });
 
   // Only create incident if threshold reached
-  if (newFailures === failureThreshold) {
+  if (newFailures === FAILURE_THRESHOLD) {
     console.log(`🔴 API DOWN (${newFailures} consecutive failures): ${api.name} (${api.url})`);
     await detectAndCreateIncident(api, statusCode);
-  } else if (newFailures < failureThreshold) {
-    console.log(`⚠️ API FAILING (${newFailures}/${failureThreshold}): ${api.name} (${api.url})`);
+  } else if (newFailures < FAILURE_THRESHOLD) {
+    console.log(`⚠️ API FAILING (${newFailures}/${FAILURE_THRESHOLD}): ${api.name} (${api.url})`);
   }
 }
 
