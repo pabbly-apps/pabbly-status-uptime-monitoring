@@ -9,6 +9,7 @@ export default function AddAPIModal({ isOpen, onClose, onSuccess, editingAPI }) 
     monitoring_interval: 60,
     expected_status_code: 200,
     timeout_duration: 30000,
+    failure_threshold: 2,
     is_active: true,
     is_public: true,
     group_id: '',
@@ -39,6 +40,7 @@ export default function AddAPIModal({ isOpen, onClose, onSuccess, editingAPI }) 
         monitoring_interval: editingAPI.monitoring_interval,
         expected_status_code: editingAPI.expected_status_code,
         timeout_duration: editingAPI.timeout_duration,
+        failure_threshold: editingAPI.failure_threshold ?? 2,
         is_active: editingAPI.is_active,
         is_public: editingAPI.is_public ?? true,
         group_id: editingAPI.group_id || '',
@@ -50,6 +52,7 @@ export default function AddAPIModal({ isOpen, onClose, onSuccess, editingAPI }) 
         monitoring_interval: 60,
         expected_status_code: 200,
         timeout_duration: 30000,
+        failure_threshold: 2,
         is_active: true,
         is_public: true,
         group_id: '',
@@ -223,6 +226,24 @@ export default function AddAPIModal({ isOpen, onClose, onSuccess, editingAPI }) 
                 className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
               />
               <p className="mt-1 text-xs text-gray-500">Default: 30000ms (30 seconds)</p>
+            </div>
+
+            {/* Failure Threshold */}
+            <div>
+              <label htmlFor="failure_threshold" className="block text-sm font-medium text-gray-700 mb-1">
+                Failure Threshold
+              </label>
+              <input
+                type="number"
+                id="failure_threshold"
+                name="failure_threshold"
+                min="1"
+                max="10"
+                value={formData.failure_threshold}
+                onChange={handleChange}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              />
+              <p className="mt-1 text-xs text-gray-500">Consecutive failed checks before marking DOWN (default 2)</p>
             </div>
 
             {/* Active Toggle */}

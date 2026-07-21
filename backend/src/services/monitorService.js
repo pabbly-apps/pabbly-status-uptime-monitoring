@@ -207,6 +207,10 @@ async function handleStatusChange(api, currentStatus, statusCode = null) {
   const apiId = api.id;
   const tracking = apiLastStatus.get(apiId);
 
+  // Consecutive failures before marking DOWN — editable per-API from the Admin UI
+  // (apis.failure_threshold); falls back to the global default when unset.
+  const failureThreshold = api.failure_threshold ?? FAILURE_THRESHOLD;
+
   if (currentStatus === 'success') {
     // Reset counter on success
     apiLastStatus.set(apiId, { status: 'success', consecutiveFailures: 0 });
@@ -225,11 +229,11 @@ async function handleStatusChange(api, currentStatus, statusCode = null) {
   apiLastStatus.set(apiId, { status: currentStatus, consecutiveFailures: newFailures });
 
   // Only create incident if threshold reached
-  if (newFailures === FAILURE_THRESHOLD) {
+  if (newFailures === failureThreshold) {
     console.log(`🔴 API DOWN (${newFailures} consecutive failures): ${api.name} (${api.url})`);
     await detectAndCreateIncident(api, statusCode);
-  } else if (newFailures < FAILURE_THRESHOLD) {
-    console.log(`⚠️ API FAILING (${newFailures}/${FAILURE_THRESHOLD}): ${api.name} (${api.url})`);
+  } else if (newFailures < failureThreshold) {
+    console.log(`⚠️ API FAILING (${newFailures}/${failureThreshold}): ${api.name} (${api.url})`);
   }
 }
 

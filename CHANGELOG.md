@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.8.0] - 2026-07-21
+
+### Added
+
+#### Per-API Failure Threshold (editable)
+
+Re-introduced a single per-API setting — **Failure Threshold** — editable from the Add/Edit API form. It controls how many consecutive failed checks are required before an API is marked DOWN and an incident/alert is raised. This is a focused subset of the removed v1.6.0 feature: **retry count and retry delay are intentionally NOT re-added** (retry stays fixed at the built-in single retry).
+
+**Files Changed:**
+- `backend/src/services/monitorService.js` — `handleStatusChange` now reads `api.failure_threshold ?? FAILURE_THRESHOLD`.
+- `backend/src/controllers/adminController.js` — Accept/validate (1–10)/persist `failure_threshold` on create + update; added to the read SELECTs.
+- `frontend/src/components/admin/AddAPIModal.jsx` — Added the "Failure Threshold" field (below Timeout).
+- `database/schema.sql` + `database/migrations/009_add_failure_threshold.sql` — `failure_threshold` column (default 2, idempotent).
+- `backend/package.json` — Version bump to 1.8.0
+
+**Behaviour:** default 2 preserves existing behaviour for all endpoints. The retry mechanism is unchanged (fixed single retry).
+
+**Migration:** `009_add_failure_threshold.sql` is idempotent (`ADD COLUMN IF NOT EXISTS`); the column already exists in the current production DB from the earlier v1.6.0 work, so this is a no-op there.
+
+---
+
 ## [1.7.0] - 2026-07-21
 
 ### Removed
