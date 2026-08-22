@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.9.0] - 2026-08-22
+
+### Added
+
+#### Critical Phone Alarm (Home Assistant push gateway)
+
+Google Chat is enough for routine downtime but not for a critical system failing at 3am. This adds an opt-in per-API **Critical** flag: when such an API goes down, a loud alarm is pushed to the on-call phones and repeated until each person silences it, the service recovers, or a maximum window elapses.
+
+Delivery runs through a self-hosted **Home Assistant** instance used purely as a push gateway. It is the only free, self-hostable option whose mobile app holds Apple's Critical Alerts entitlement — which is what lets an iPhone ring at full volume through the silent switch and Focus/Do Not Disturb. Android rings on `alarm_stream_max`, i.e. max alarm volume even on silent/vibrate.
+
+**Why it repeats rather than loops:** neither mobile OS can loop a sound from a push notification (iOS caps notification sound at ~30s, played once). "Continuous until silenced" is therefore achieved by re-sending on a fixed interval, every repeat reusing the same `tag` so it replaces the previous notification instead of stacking.
+
+**Per-API routing.** Each critical API can name the exact phones it should wake, so one project's outage never wakes another project's team. There is deliberately **no fallback to alerting everyone**: if an API's routed devices are all gone it alarms nobody, logs an error, and the incident records `no_targets`. Google Chat and email still fire, so the outage is never invisible, and `updateSettings` warns before an admin can reach that state. Devices can carry a friendly label (`mobile_app_pixel_8:Ravi (Pixel)`) shown when picking who an API wakes.
+
+**Per-device silencing.** Tapping the notification opens a page with a single action — *Silence my phone* — which clears that device only and leaves everyone else ringing, so someone muting their pocket can never mute the person who would actually fix the problem. Recovery auto-silences every phone with no action needed.
+
+**Files Changed:**
+- `backend/src/services/criticalAlertService.js` — **New.** Push, repeat, per-device silence, clear, recovery all-clear, and test. Fire-and-forget like `googleChatService`; logs to the shared `webhook_logs` ledger.
+- `backend/src/services/incidentService.js` — Arms the alarm on incident creation and stands it down on auto-resolve (8 lines at the existing fan-out).
+- `backend/src/routes/ack.js` + `backend/src/controllers/publicController.js` — **New.** Token-authenticated responder page. The GET only renders a choice and never silences anything; the action is a POST, so link previewers and security scanners cannot silence a live alarm.
+- `backend/src/server.js` — Starts the repeater; mounts the responder route ahead of the shared public rate limiter with its own budget, so responder traffic and status-page traffic cannot starve each other.
+- `backend/src/controllers/adminController.js` — `is_critical` / `alert_targets` on create+update with device validation; HA gateway settings; masks `ha_token` in responses; warns when a settings change would strand a critical API.
+- `frontend/src/pages/Settings.jsx` — New **Phone Alarm** tab with a Test Alarm button.
+- `frontend/src/components/admin/AddAPIModal.jsx` — **Critical** toggle plus a checkbox list of which phones to wake (a list, not free text — a typo would mean nobody gets woken).
+- `database/schema.sql` + `database/migrations/010_add_critical_phone_alarm.sql` — 16 columns and 2 indexes, idempotent.
+- `install.sh`, `docs/DEPLOYMENT.md`, `docs/AUTOMATED-DEPLOYMENT.md` — **Added the missing `npm run migrate` step** (see Fixed).
+- `backend/package.json` → 1.9.0, `frontend/package.json` → 1.2.0
+
+**Behaviour:** `is_critical` and `critical_alert_enabled` both default to `FALSE`, so nothing rings until an API is explicitly opted in and the gateway is configured. Google Chat, email, webhooks and the monitoring loop are unchanged.
+
+**State lives in Postgres, not memory** — unlike `apiLastStatus`, a pm2 restart cannot silently kill a live alarm, which is the exact failure this feature exists to prevent. The repeater polls for due rows and self-heals across restarts with no rehydration step.
+
+### Fixed
+
+#### `npm run migrate` missing from every deploy path
+
+`install.sh` applied `database/schema.sql` only, and the documented update commands went straight from `git pull` to `pm2 restart`. Any release that added a column would leave production unmigrated — verified against a pre-change database, that breaks adding an API and saving any setting, while monitoring keeps running (so it would look healthy). The step is now in the installer and both deployment docs.
+
+**Known issue (unfixed):** `backend/src/config/migrate.js` compares `import.meta.url` against `process.argv[1]`, which never match on Windows (`file:///D:/...` vs `D:\...`), so `npm run migrate` is a silent no-op on Windows dev machines. Linux servers are unaffected.
+
+### Notes
+
+**Migration:** `010_add_critical_phone_alarm.sql` is idempotent (`ADD COLUMN IF NOT EXISTS`) and was verified against throwaway databases to produce a schema identical to a fresh `schema.sql` install.
+
+**Deploy order:** `git pull` → `npm install --production` → **`npm run migrate`** → `npm run build` (frontend) → `pm2 restart`. The frontend must be rebuilt or the Phone Alarm tab will not appear.
+
+**Before enabling:** set `ENCRYPTION_KEY` *before* saving the HA token or it is stored in plaintext (as `smtp_pass` is today); `FRONTEND_URL` must be the public HTTPS URL because the silence link is built from it; keep pm2 at a single instance, as the repeater runs in-process.
+
+**Not yet verified on real hardware:** the test suite runs against a mock Home Assistant. Complete the HA setup and use **Send Test Alarm** to confirm the alarm is genuinely loud through Do Not Disturb before relying on it.
+
+---
+
 ## [1.8.0] - 2026-07-21
 
 ### Added

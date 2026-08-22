@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
-import { createAPI, updateAPI, getAPIGroups } from '../../services/adminService';
+import { createAPI, updateAPI, getAPIGroups, getSettings } from '../../services/adminService';
 
 export default function AddAPIModal({ isOpen, onClose, onSuccess, editingAPI }) {
   const [formData, setFormData] = useState({
@@ -12,16 +12,53 @@ export default function AddAPIModal({ isOpen, onClose, onSuccess, editingAPI }) 
     failure_threshold: 2,
     is_active: true,
     is_public: true,
+    is_critical: false,
+    alert_targets: '',
     group_id: '',
   });
   const [loading, setLoading] = useState(false);
   const [groups, setGroups] = useState([]);
+  const [devices, setDevices] = useState([]);
 
   useEffect(() => {
     if (isOpen) {
       fetchGroups();
+      fetchDevices();
     }
   }, [isOpen]);
+
+  // The phones configured under Settings -> Phone Alarm, so routing is picked
+  // from a list rather than typed (a typo would mean nobody gets woken).
+  const fetchDevices = async () => {
+    try {
+      const response = await getSettings();
+      // Entries may carry a friendly label: "mobile_app_ravi:Ravi (iPhone)".
+      const configured = (response?.settings?.ha_notify_targets || '')
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+        .map((entry) => {
+          const idx = entry.indexOf(':');
+          if (idx === -1) return { target: entry, label: entry };
+          const target = entry.slice(0, idx).trim();
+          const label = entry.slice(idx + 1).trim();
+          return { target, label: label || target };
+        })
+        .filter((d) => d.target);
+      setDevices(configured);
+    } catch (error) {
+      console.error('Error fetching alarm devices:', error);
+    }
+  };
+
+  const toggleDevice = (device) => {
+    const current = (formData.alert_targets || '')
+      .split(',').map((t) => t.trim()).filter(Boolean);
+    const next = current.includes(device)
+      ? current.filter((t) => t !== device)
+      : [...current, device];
+    setFormData({ ...formData, alert_targets: next.join(',') });
+  };
 
   const fetchGroups = async () => {
     try {
@@ -43,6 +80,8 @@ export default function AddAPIModal({ isOpen, onClose, onSuccess, editingAPI }) 
         failure_threshold: editingAPI.failure_threshold ?? 2,
         is_active: editingAPI.is_active,
         is_public: editingAPI.is_public ?? true,
+        is_critical: editingAPI.is_critical ?? false,
+        alert_targets: editingAPI.alert_targets || '',
         group_id: editingAPI.group_id || '',
       });
     } else {
@@ -55,6 +94,8 @@ export default function AddAPIModal({ isOpen, onClose, onSuccess, editingAPI }) 
         failure_threshold: 2,
         is_active: true,
         is_public: true,
+        is_critical: false,
+        alert_targets: '',
         group_id: '',
       });
     }
@@ -278,6 +319,65 @@ export default function AddAPIModal({ isOpen, onClose, onSuccess, editingAPI }) 
             <p className="text-xs text-gray-500 -mt-2 ml-6">
               If unchecked, this API will only be visible to logged-in admins
             </p>
+
+            {/* Critical Phone Alarm Toggle */}
+            <div className="flex items-center pt-2 border-t">
+              <input
+                type="checkbox"
+                id="is_critical"
+                name="is_critical"
+                checked={formData.is_critical}
+                onChange={handleChange}
+                className="h-4 w-4 text-red-600 focus:ring-red-500 border-gray-300 rounded"
+              />
+              <label htmlFor="is_critical" className="ml-2 block text-sm font-medium text-gray-900">
+                Critical &mdash; ring an alarm on on-call phones
+              </label>
+            </div>
+            <p className="text-xs text-gray-500 -mt-2 ml-6">
+              Downtime triggers a loud alarm on the phones below, repeating until each
+              person silences it or the service recovers. Use sparingly &mdash; if
+              everything is critical, people mute the app.
+            </p>
+
+            {/* Which phones this API should ring */}
+            {formData.is_critical && (
+              <div className="ml-6 p-3 bg-gray-50 border border-gray-200 rounded-md">
+                <p className="text-sm font-medium text-gray-900 mb-2">Ring which phones?</p>
+
+                {devices.length === 0 ? (
+                  <p className="text-xs text-gray-500">
+                    No phones configured yet. Add them under Settings &rarr; Phone Alarm,
+                    then reopen this dialog.
+                  </p>
+                ) : (
+                  <>
+                    <div className="space-y-1.5">
+                      {devices.map(({ target, label }) => {
+                        const selected = (formData.alert_targets || '')
+                          .split(',').map((t) => t.trim()).filter(Boolean);
+                        return (
+                          <label key={target} className="flex items-center cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={selected.includes(target)}
+                              onChange={() => toggleDevice(target)}
+                              className="h-4 w-4 text-red-600 focus:ring-red-500 border-gray-300 rounded"
+                            />
+                            <span className="ml-2 text-sm text-gray-700">{label}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    <p className="mt-2 text-xs text-gray-500">
+                      {(formData.alert_targets || '').trim() === ''
+                        ? 'Nothing selected — every phone will ring. Tick specific people to route this API to them only.'
+                        : 'Only the people ticked above will be woken for this API.'}
+                    </p>
+                  </>
+                )}
+              </div>
+            )}
 
             {/* Actions */}
             <div className="flex justify-end gap-3 pt-4 border-t">

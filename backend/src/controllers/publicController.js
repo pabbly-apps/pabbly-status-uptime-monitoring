@@ -1,4 +1,8 @@
 import { query } from '../config/database.js';
+import {
+  silenceDeviceForIncident,
+  getIncidentForResponder,
+} from '../services/criticalAlertService.js';
 
 // Get overall system status
 export const getOverallStatus = async (req, res) => {
@@ -558,4 +562,172 @@ export const getDrillDownPingLogs = async (req, res) => {
       message: 'Failed to fetch drill-down ping logs'
     });
   }
+};
+
+// ============================================
+// CRITICAL ALARM RESPONDER ACTIONS
+// ============================================
+
+// Minimal HTML escape — the API name is admin-controlled, but this page is
+// reachable without auth, so never interpolate raw values into markup.
+const escapeHtml = (value) => String(value ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
+const PAGE_STYLE = `
+  :root { color-scheme: light dark; }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         background:#f8fafc; color:#0f172a; padding:24px; }
+  @media (prefers-color-scheme: dark) {
+    body { background:#0f172a; color:#f1f5f9; }
+    .card { background:#1e293b !important; }
+    .ghost { background:transparent !important; color:#f1f5f9 !important; border-color:#475569 !important; }
+  }
+  .card { background:#fff; border-radius:16px; padding:36px 28px; max-width:440px; width:100%;
+          text-align:center; box-shadow:0 10px 30px rgba(0,0,0,.08); }
+  .icon { width:68px; height:68px; border-radius:50%; margin:0 auto 18px; display:flex;
+          align-items:center; justify-content:center; font-size:34px; color:#fff; }
+  h1 { font-size:21px; margin:0 0 10px; }
+  p { margin:0 0 8px; font-size:15px; line-height:1.55; opacity:.75; }
+  form { margin:0; }
+  button { width:100%; padding:15px 18px; font-size:16px; font-weight:600; border-radius:12px;
+           border:none; cursor:pointer; margin-top:12px; font-family:inherit; }
+  .primary { background:#dc2626; color:#fff; }
+  .ghost { background:#f1f5f9; color:#0f172a; border:1px solid #cbd5e1; }
+  .hint { font-size:13px; opacity:.6; margin-top:8px; }
+`;
+
+const shell = (title, bodyHtml) => `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>${escapeHtml(title)}</title>
+<style>${PAGE_STYLE}</style>
+</head>
+<body>
+  <div class="card">${bodyHtml}</div>
+</body>
+</html>`;
+
+const resultPage = (heading, detail, tone) => {
+  const color = tone === 'error' ? '#dc2626' : tone === 'muted' ? '#64748b' : '#16a34a';
+  const icon = tone === 'error' ? '&#10007;' : tone === 'muted' ? '&#128263;' : '&#10003;';
+  return shell(heading, `
+    <div class="icon" style="background:${color}">${icon}</div>
+    <h1>${escapeHtml(heading)}</h1>
+    <p>${escapeHtml(detail)}</p>
+  `);
+};
+
+/**
+ * The choice page a responder lands on when they tap the notification.
+ *
+ * Rendering it has NO side effects, deliberately. Silencing an alarm must never
+ * happen on a GET: link previewers, security scanners and browser prefetch all
+ * issue GETs, and any of them could otherwise silence a live 3am alarm before a
+ * human ever saw it. Both actions below are POSTs.
+ */
+export const acknowledgeAlarmPage = async (req, res) => {
+  const { incidentId } = req.params;
+  const token = req.query.t;
+  const device = req.query.d;
+
+  res.set('Cache-Control', 'no-store');
+
+  if (!/^\d+$/.test(String(incidentId))) {
+    return res.status(400).type('html').send(
+      resultPage('Invalid link', 'That acknowledgement link is malformed.', 'error')
+    );
+  }
+
+  const info = await getIncidentForResponder(Number(incidentId), token);
+
+  if (!info.ok) {
+    const messages = {
+      not_found: 'That incident no longer exists.',
+      invalid_token: 'This link is invalid or has expired.',
+      server_error: 'Something went wrong. The alarm may still be active — check the dashboard.',
+    };
+    return res.status(info.status || 400).type('html').send(
+      resultPage('Cannot respond', messages[info.reason] || 'Unable to act on this alarm.', 'error')
+    );
+  }
+
+  if (info.acknowledged) {
+    return res.type('html').send(
+      resultPage('Alarm already stopped', `The alarm for ${info.apiName} is no longer active.`, 'success')
+    );
+  }
+
+  if (!info.alarmActive) {
+    return res.type('html').send(
+      resultPage('Alarm already stopped', `The alarm for ${info.apiName} is no longer active.`, 'success')
+    );
+  }
+
+  // Without a device we cannot silence anything specific, and silencing
+  // everyone is deliberately not on offer.
+  if (!device) {
+    return res.type('html').send(
+      resultPage('Alarm active', `${info.apiName} is still down. This link is not tied to a device, so it cannot silence anything — check the dashboard.`, 'error')
+    );
+  }
+
+  return res.type('html').send(shell(`${info.apiName} is down`, `
+    <div class="icon" style="background:#dc2626">&#9888;</div>
+    <h1>${escapeHtml(info.apiName)} is down</h1>
+    <p>Still down. Silencing only affects this phone.</p>
+    <form method="POST" action="/api/public/ack/${encodeURIComponent(incidentId)}/mute">
+      <input type="hidden" name="t" value="${escapeHtml(token)}">
+      <input type="hidden" name="d" value="${escapeHtml(device)}">
+      <button type="submit" class="primary">Silence my phone</button>
+    </form>
+    <p class="hint">Everyone else keeps ringing. The alarm stops by itself when the service recovers.</p>
+  `));
+};
+
+/**
+ * "Silence my phone only" — mute this one device, leave everyone else ringing.
+ */
+export const muteAlarmForDevice = async (req, res) => {
+  const { incidentId } = req.params;
+  const token = req.body?.t || req.query.t;
+  const device = req.body?.d || req.query.d;
+
+  res.set('Cache-Control', 'no-store');
+
+  if (!/^\d+$/.test(String(incidentId))) {
+    return res.status(400).type('html').send(
+      resultPage('Invalid link', 'That link is malformed.', 'error')
+    );
+  }
+
+  const result = await silenceDeviceForIncident(Number(incidentId), token, device);
+
+  if (!result.ok) {
+    const messages = {
+      not_found: 'That incident no longer exists.',
+      invalid_token: 'This link is invalid or has expired.',
+      unknown_device: 'This link is not tied to a registered device.',
+      not_configured: 'Critical alarms are not configured.',
+      server_error: 'Something went wrong. Check the dashboard.',
+    };
+    return res.status(result.status || 400).type('html').send(
+      resultPage('Not silenced', messages[result.reason] || 'Unable to silence this alarm.', 'error')
+    );
+  }
+
+  const detail = result.remaining > 0
+    ? `Silenced on this phone. ${result.remaining} other device(s) are still being alerted about ${result.apiName}.`
+    : `Silenced on this phone. Every device has now silenced this alarm and ${result.apiName} is still down — please check the dashboard.`;
+
+  return res.type('html').send(
+    resultPage('Silenced on this phone', detail, result.remaining > 0 ? 'muted' : 'error')
+  );
 };

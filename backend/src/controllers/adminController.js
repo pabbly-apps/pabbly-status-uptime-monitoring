@@ -2,6 +2,7 @@ import { query, getClient } from '../config/database.js';
 import { testWebhook as testWebhookService } from '../services/webhookService.js';
 import { sanitizeSVG } from '../config/upload.js';
 import { encrypt } from '../utils/encryption.js';
+import { parseTargetSpec } from '../services/criticalAlertService.js';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -16,6 +17,8 @@ const MAX_LENGTHS = {
   smtp_user: 254, smtp_from: 500, smtp_recipients: 2000,
   allowed_domains: 2000, brand_color: 20, incident_title: 500,
   incident_description: 10000, email: 254, description: 5000,
+  ha_base_url: 2048, ha_token: 2048, ha_notify_targets: 2000,
+  alert_targets: 2000,
 };
 
 function validateString(value, fieldName, maxKey) {
@@ -28,6 +31,30 @@ function validateNumber(value, fieldName, min, max) {
   const num = Number(value);
   if (isNaN(num) || !Number.isFinite(num)) return `${fieldName} must be a valid number`;
   if (num < min || num > max) return `${fieldName} must be between ${min} and ${max}`;
+  return null;
+}
+
+// Validate per-API alarm routing against the configured devices. A typo here
+// would mean an API silently wakes nobody, so it is rejected at save time
+// rather than discovered during an outage.
+async function validateAlertTargets(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+
+  const requested = parseTargetSpec(value).map((d) => d.target);
+  if (!requested.length) return null;
+
+  const settings = await query('SELECT ha_notify_targets FROM system_settings WHERE id = 1');
+  const configured = parseTargetSpec(settings.rows[0]?.ha_notify_targets).map((d) => d.target);
+
+  if (!configured.length) {
+    return 'No notification devices are configured yet. Add them under Settings -> Phone Alarm first.';
+  }
+
+  const unknown = requested.filter((t) => !configured.includes(t));
+  if (unknown.length) {
+    return `Unknown notification device(s): ${unknown.join(', ')}. Configured devices are: ${configured.join(', ')}`;
+  }
+
   return null;
 }
 
@@ -158,6 +185,8 @@ export const createAPI = async (req, res) => {
       failure_threshold = 2,
       is_active = true,
       is_public = true,
+      is_critical = false,
+      alert_targets = null,
       group_id,
     } = req.body;
 
@@ -176,6 +205,8 @@ export const createAPI = async (req, res) => {
     if ((err = validateNumber(expected_status_code, 'Expected status code', 100, 599))) return validationError(res, err);
     if ((err = validateNumber(timeout_duration, 'Timeout duration', 1000, 120000))) return validationError(res, err);
     if ((err = validateNumber(failure_threshold, 'Failure threshold', 1, 10))) return validationError(res, err);
+    if (alert_targets !== undefined && alert_targets !== null && (err = validateString(alert_targets, 'Alert targets', 'alert_targets'))) return validationError(res, err);
+    if ((err = await validateAlertTargets(alert_targets))) return validationError(res, err);
 
     // Validate URL format
     try {
@@ -207,10 +238,10 @@ export const createAPI = async (req, res) => {
     }
 
     const result = await query(
-      `INSERT INTO apis (name, url, monitoring_interval, expected_status_code, timeout_duration, failure_threshold, is_active, is_public, group_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `INSERT INTO apis (name, url, monitoring_interval, expected_status_code, timeout_duration, failure_threshold, is_active, is_public, is_critical, alert_targets, group_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
-      [name, url, monitoring_interval, expected_status_code, timeout_duration, failure_threshold, is_active, is_public, finalGroupId]
+      [name, url, monitoring_interval, expected_status_code, timeout_duration, failure_threshold, is_active, is_public, is_critical, alert_targets, finalGroupId]
     );
 
     res.status(201).json({
@@ -240,6 +271,8 @@ export const updateAPI = async (req, res) => {
       failure_threshold,
       is_active,
       is_public,
+      is_critical,
+      alert_targets,
       group_id,
     } = req.body;
 
@@ -260,6 +293,8 @@ export const updateAPI = async (req, res) => {
     if (expected_status_code !== undefined && (err = validateNumber(expected_status_code, 'Expected status code', 100, 599))) return validationError(res, err);
     if (timeout_duration !== undefined && (err = validateNumber(timeout_duration, 'Timeout duration', 1000, 120000))) return validationError(res, err);
     if (failure_threshold !== undefined && (err = validateNumber(failure_threshold, 'Failure threshold', 1, 10))) return validationError(res, err);
+    if (alert_targets !== undefined && alert_targets !== null && (err = validateString(alert_targets, 'Alert targets', 'alert_targets'))) return validationError(res, err);
+    if (alert_targets !== undefined && (err = await validateAlertTargets(alert_targets))) return validationError(res, err);
 
     // Build update query dynamically
     const updates = [];
@@ -327,6 +362,18 @@ export const updateAPI = async (req, res) => {
     if (is_public !== undefined) {
       updates.push(`is_public = $${paramCount}`);
       values.push(is_public);
+      paramCount++;
+    }
+
+    if (is_critical !== undefined) {
+      updates.push(`is_critical = $${paramCount}`);
+      values.push(is_critical);
+      paramCount++;
+    }
+
+    if (alert_targets !== undefined) {
+      updates.push(`alert_targets = $${paramCount}`);
+      values.push(alert_targets && String(alert_targets).trim() !== '' ? alert_targets : null);
       paramCount++;
     }
 
@@ -758,6 +805,11 @@ export const getSettings = async (req, res) => {
     if (settings.smtp_pass) {
       settings.smtp_pass = '••••••••••••••••';
     }
+    // The Home Assistant long-lived token grants full control of that instance.
+    // Never send it back to the browser.
+    if (settings.ha_token) {
+      settings.ha_token = '••••••••••••••••';
+    }
 
     res.json({
       success: true,
@@ -788,6 +840,12 @@ export const updateSettings = async (req, res) => {
       google_chat_webhook_enabled,
       admin_timezone,
       allowed_domains,
+      ha_base_url,
+      ha_token,
+      ha_notify_targets,
+      critical_alert_enabled,
+      critical_alert_repeat_seconds,
+      critical_alert_max_minutes,
     } = req.body;
 
     // Validate provided fields
@@ -800,6 +858,11 @@ export const updateSettings = async (req, res) => {
     if (notification_email !== undefined && notification_email !== null && (err = validateString(notification_email, 'Notification email', 'email'))) return validationError(res, err);
     if (allowed_domains !== undefined && (err = validateString(allowed_domains, 'Allowed domains', 'allowed_domains'))) return validationError(res, err);
     if (data_retention_days !== undefined && (err = validateNumber(data_retention_days, 'Data retention days', 1, 365))) return validationError(res, err);
+    if (ha_base_url !== undefined && ha_base_url !== null && (err = validateString(ha_base_url, 'Home Assistant URL', 'ha_base_url'))) return validationError(res, err);
+    if (ha_token !== undefined && ha_token !== null && (err = validateString(ha_token, 'Home Assistant token', 'ha_token'))) return validationError(res, err);
+    if (ha_notify_targets !== undefined && ha_notify_targets !== null && (err = validateString(ha_notify_targets, 'Notification targets', 'ha_notify_targets'))) return validationError(res, err);
+    if (critical_alert_repeat_seconds !== undefined && (err = validateNumber(critical_alert_repeat_seconds, 'Alarm repeat interval', 10, 300))) return validationError(res, err);
+    if (critical_alert_max_minutes !== undefined && (err = validateNumber(critical_alert_max_minutes, 'Alarm max duration', 1, 120))) return validationError(res, err);
 
     const updates = [];
     const values = [];
@@ -883,6 +946,43 @@ export const updateSettings = async (req, res) => {
       paramCount++;
     }
 
+    if (ha_base_url !== undefined) {
+      updates.push(`ha_base_url = $${paramCount}`);
+      values.push(ha_base_url);
+      paramCount++;
+    }
+
+    // Skip the masked placeholder so re-saving the form doesn't wipe the token.
+    if (ha_token !== undefined && ha_token !== '••••••••••••••••') {
+      updates.push(`ha_token = $${paramCount}`);
+      values.push(encrypt(ha_token));
+      paramCount++;
+    }
+
+    if (ha_notify_targets !== undefined) {
+      updates.push(`ha_notify_targets = $${paramCount}`);
+      values.push(ha_notify_targets);
+      paramCount++;
+    }
+
+    if (critical_alert_enabled !== undefined) {
+      updates.push(`critical_alert_enabled = $${paramCount}`);
+      values.push(critical_alert_enabled);
+      paramCount++;
+    }
+
+    if (critical_alert_repeat_seconds !== undefined) {
+      updates.push(`critical_alert_repeat_seconds = $${paramCount}`);
+      values.push(critical_alert_repeat_seconds);
+      paramCount++;
+    }
+
+    if (critical_alert_max_minutes !== undefined) {
+      updates.push(`critical_alert_max_minutes = $${paramCount}`);
+      values.push(critical_alert_max_minutes);
+      paramCount++;
+    }
+
     if (updates.length === 0) {
       return res.status(400).json({
         error: 'No updates provided',
@@ -901,10 +1001,35 @@ export const updateSettings = async (req, res) => {
 
     const result = await query(updateQuery, values);
 
+    // Removing a device can strand an API that routes only to it. That API
+    // would then ring nobody — and we deliberately do NOT fall back to alerting
+    // everyone, because these phones belong to different project teams. So say
+    // so plainly instead of letting it be discovered during an outage.
+    let warning = null;
+    if (ha_notify_targets !== undefined) {
+      const configured = parseTargetSpec(ha_notify_targets).map((d) => d.target);
+      const critical = await query(
+        "SELECT name, alert_targets FROM apis WHERE is_critical = TRUE AND alert_targets IS NOT NULL AND alert_targets <> ''"
+      );
+      const stranded = critical.rows
+        .filter((a) => !parseTargetSpec(a.alert_targets).some((d) => configured.includes(d.target)))
+        .map((a) => a.name);
+
+      if (stranded.length) {
+        warning = `Saved, but these critical APIs now route to no configured device and will alarm nobody: ${stranded.join(', ')}. Update their device selection.`;
+        console.warn(`Critical APIs left without an alarm device: ${stranded.join(', ')}`);
+      }
+    }
+
+    const updated = result.rows[0] || {};
+    if (updated.smtp_pass) updated.smtp_pass = '••••••••••••••••';
+    if (updated.ha_token) updated.ha_token = '••••••••••••••••';
+
     res.json({
       success: true,
       message: 'Settings updated successfully',
-      settings: result.rows[0],
+      warning,
+      settings: updated,
     });
   } catch (error) {
     console.error('Update settings error:', error);
@@ -1369,6 +1494,35 @@ export const testGoogleChat = async (req, res) => {
     res.status(500).json({
       error: 'Server error',
       message: 'Failed to test Google Chat webhook',
+    });
+  }
+};
+
+export const testCriticalAlert = async (req, res) => {
+  try {
+    const { testCriticalAlert: runTest } = await import('../services/criticalAlertService.js');
+    const result = await runTest();
+
+    if (result.success) {
+      res.json({
+        success: true,
+        message: result.message,
+        responseTime: result.responseTime,
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        message: result.message,
+        error: result.error,
+        statusCode: result.statusCode,
+        responseTime: result.responseTime,
+      });
+    }
+  } catch (error) {
+    console.error('Test critical alarm error:', error);
+    res.status(500).json({
+      error: 'Server error',
+      message: 'Failed to send test alarm',
     });
   }
 };

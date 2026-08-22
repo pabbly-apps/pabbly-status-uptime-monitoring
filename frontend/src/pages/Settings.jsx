@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { getUsers, addUser as addUserService, removeUser as removeUserService } from '../services/authService';
-import { getSettings, updateSettings, uploadLogo, getEmailSettings, updateEmailSettings, testEmail, testWebhook, testGoogleChat, getVersion } from '../services/adminService';
+import { getSettings, updateSettings, uploadLogo, getEmailSettings, updateEmailSettings, testEmail, testWebhook, testGoogleChat, testCriticalAlert, getVersion } from '../services/adminService';
 import { getGroupedTimezones, getTimezoneLabel, getTimezoneAbbreviation, findTimezone } from '../utils/timezone';
 import Loading from '../components/shared/Loading';
 import toast from 'react-hot-toast';
@@ -16,6 +16,7 @@ export default function Settings() {
   const [testingEmail, setTestingEmail] = useState(false);
   const [testingWebhook, setTestingWebhook] = useState(false);
   const [testingGoogleChat, setTestingGoogleChat] = useState(false);
+  const [testingCriticalAlert, setTestingCriticalAlert] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [version, setVersion] = useState('');
   const [emailInputValue, setEmailInputValue] = useState('');
@@ -51,6 +52,12 @@ export default function Settings() {
     logo_url: '',
     admin_timezone: 'UTC',
     allowed_domains: '*',
+    ha_base_url: '',
+    ha_token: '',
+    ha_notify_targets: '',
+    critical_alert_enabled: false,
+    critical_alert_repeat_seconds: 30,
+    critical_alert_max_minutes: 15,
   });
 
   // Email SMTP Settings
@@ -99,6 +106,12 @@ export default function Settings() {
           logo_url: settingsRes.settings.logo_url || '',
           admin_timezone: settingsRes.settings.admin_timezone || 'UTC',
           allowed_domains: domains,
+          ha_base_url: settingsRes.settings.ha_base_url || '',
+          ha_token: settingsRes.settings.ha_token || '',
+          ha_notify_targets: settingsRes.settings.ha_notify_targets || '',
+          critical_alert_enabled: settingsRes.settings.critical_alert_enabled || false,
+          critical_alert_repeat_seconds: settingsRes.settings.critical_alert_repeat_seconds ?? 30,
+          critical_alert_max_minutes: settingsRes.settings.critical_alert_max_minutes ?? 15,
         });
 
         // Initialize domain tags from settings
@@ -436,6 +449,20 @@ export default function Settings() {
     }
   };
 
+  const handleTestCriticalAlert = async () => {
+    setTestingCriticalAlert(true);
+
+    try {
+      const response = await testCriticalAlert();
+      toast.success(response.message || 'Test alarm sent to your phone');
+    } catch (error) {
+      console.error('Test critical alarm error:', error);
+      toast.error(error.response?.data?.message || 'Failed to send test alarm. Check the Home Assistant URL, token and targets.');
+    } finally {
+      setTestingCriticalAlert(false);
+    }
+  };
+
   const handleLogoChange = (e) => {
     const file = e.target.files[0];
     if (file) {
@@ -715,6 +742,16 @@ export default function Settings() {
               }`}
             >
               Google Chat
+            </button>
+            <button
+              onClick={() => handleTabChange('criticalalert')}
+              className={`px-4 sm:px-6 py-3 text-xs sm:text-sm font-medium border-b-2 transition-colors whitespace-nowrap flex-shrink-0 ${
+                activeTab === 'criticalalert'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              Phone Alarm
             </button>
             <button
               onClick={() => handleTabChange('email')}
@@ -1217,6 +1254,171 @@ export default function Settings() {
                   className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
                 >
                   {saving ? 'Saving...' : 'Update Google Chat Settings'}
+                </button>
+              </div>
+            </form>
+          </div>
+          )}
+
+          {/* Critical Phone Alarm Tab */}
+          {activeTab === 'criticalalert' && (
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">
+              Critical Phone Alarm
+            </h2>
+
+            <div className="bg-red-50 border border-red-200 rounded-md p-4 mb-4">
+              <p className="text-sm text-red-700">
+                When an API marked <strong>Critical</strong> goes down, this rings a loud alarm on
+                on-call phones and repeats until someone taps the notification to acknowledge it.
+                On iPhone it plays through the silent switch and Focus/Do Not Disturb; on Android it
+                rings at max alarm volume.
+              </p>
+            </div>
+
+            <form onSubmit={handleSystemSubmit} className="space-y-4">
+              <div>
+                <label htmlFor="ha_base_url" className="block text-sm font-medium text-gray-700 mb-1">
+                  Home Assistant URL
+                </label>
+                <input
+                  type="url"
+                  id="ha_base_url"
+                  name="ha_base_url"
+                  value={systemSettings.ha_base_url}
+                  onChange={handleSystemChange}
+                  placeholder="https://ha.example.com"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  Base URL of your self-hosted Home Assistant instance (no trailing slash needed)
+                </p>
+              </div>
+
+              <div>
+                <label htmlFor="ha_token" className="block text-sm font-medium text-gray-700 mb-1">
+                  Long-Lived Access Token
+                </label>
+                <input
+                  type="password"
+                  id="ha_token"
+                  name="ha_token"
+                  value={systemSettings.ha_token}
+                  onChange={handleSystemChange}
+                  placeholder="Paste the token from your HA profile page"
+                  autoComplete="new-password"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  Stored encrypted when ENCRYPTION_KEY is set. Leave the masked value untouched to keep the current token.
+                </p>
+              </div>
+
+              <div>
+                <label htmlFor="ha_notify_targets" className="block text-sm font-medium text-gray-700 mb-1">
+                  Device Targets
+                </label>
+                <input
+                  type="text"
+                  id="ha_notify_targets"
+                  name="ha_notify_targets"
+                  value={systemSettings.ha_notify_targets}
+                  onChange={handleSystemChange}
+                  placeholder="mobile_app_pixel_8:Ravi (Pixel), mobile_app_iphone_15:Priya (iPhone)"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  Comma-separated Home Assistant notify services, one per phone. Add
+                  <code className="bg-gray-100 px-1 rounded">:Name</code> after a service to show a
+                  friendly label when picking who an API should wake &mdash; e.g.
+                  <code className="bg-gray-100 px-1 rounded">mobile_app_pixel_8:Ravi (Pixel)</code>.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label htmlFor="critical_alert_repeat_seconds" className="block text-sm font-medium text-gray-700 mb-1">
+                    Repeat Every (seconds)
+                  </label>
+                  <input
+                    type="number"
+                    id="critical_alert_repeat_seconds"
+                    name="critical_alert_repeat_seconds"
+                    min="10"
+                    max="300"
+                    value={systemSettings.critical_alert_repeat_seconds}
+                    onChange={handleSystemChange}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                    Neither phone OS can loop a sound, so the alarm re-sends on this interval (default 30s)
+                  </p>
+                </div>
+
+                <div>
+                  <label htmlFor="critical_alert_max_minutes" className="block text-sm font-medium text-gray-700 mb-1">
+                    Give Up After (minutes)
+                  </label>
+                  <input
+                    type="number"
+                    id="critical_alert_max_minutes"
+                    name="critical_alert_max_minutes"
+                    min="1"
+                    max="120"
+                    value={systemSettings.critical_alert_max_minutes}
+                    onChange={handleSystemChange}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                    Stop repeating after this long, even if nobody acknowledged (default 15m)
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center">
+                <input
+                  type="checkbox"
+                  id="critical_alert_enabled"
+                  name="critical_alert_enabled"
+                  checked={systemSettings.critical_alert_enabled}
+                  onChange={handleSystemChange}
+                  className="h-4 w-4 text-red-600 focus:ring-red-500 border-gray-300 rounded"
+                />
+                <label htmlFor="critical_alert_enabled" className="ml-2 block text-sm text-gray-900">
+                  Enable critical phone alarms
+                </label>
+              </div>
+
+              <div className="mt-4 p-4 bg-gray-50 rounded-md border border-gray-200">
+                <h3 className="text-sm font-semibold text-gray-900 mb-2">Setup checklist</h3>
+                <ol className="text-xs text-gray-600 space-y-1 list-decimal list-inside">
+                  <li>Run Home Assistant on your server and expose it over HTTPS</li>
+                  <li>In HA, open your profile page and create a <strong>Long-Lived Access Token</strong></li>
+                  <li>Each on-call person installs the <strong>Home Assistant</strong> app and signs in</li>
+                  <li>On iPhone: allow <strong>Critical Alerts</strong> when prompted (Settings &rarr; Notifications if missed)</li>
+                  <li>Find each device name under HA <strong>Developer Tools &rarr; Actions &rarr; notify</strong> and list them above</li>
+                  <li>Send a test alarm, then mark an API as <strong>Critical</strong> on the dashboard</li>
+                </ol>
+                <p className="text-xs text-gray-500 mt-2">
+                  Only APIs explicitly marked Critical will ring. Everything else keeps using Google Chat and email as before.
+                </p>
+              </div>
+
+              <div className="flex flex-col sm:flex-row justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={handleTestCriticalAlert}
+                  disabled={testingCriticalAlert || saving}
+                  className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+                >
+                  {testingCriticalAlert ? 'Sending Test...' : 'Send Test Alarm'}
+                </button>
+                <button
+                  type="submit"
+                  disabled={saving || testingCriticalAlert}
+                  className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+                >
+                  {saving ? 'Saving...' : 'Update Alarm Settings'}
                 </button>
               </div>
             </form>

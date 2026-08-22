@@ -2,6 +2,7 @@ import { query } from '../config/database.js';
 import { sendDowntimeAlert, sendRecoveryNotification } from './emailService.js';
 import { sendWebhook } from './webhookService.js';
 import { sendGoogleChatNotification } from './googleChatService.js';
+import { startCriticalAlert, resolveCriticalAlert } from './criticalAlertService.js';
 
 /**
  * Auto-create incident when API goes down
@@ -56,6 +57,10 @@ export async function detectAndCreateIncident(api, statusCode = null) {
 
     // Send Google Chat notification for API down
     await sendGoogleChatNotification('api_down', api, incident.rows[0]);
+
+    // Fire a repeating loud phone alarm — only for APIs marked critical.
+    // No-op unless someone has opted the API in AND configured the gateway.
+    await startCriticalAlert(api, incident.rows[0]);
 
     return incident.rows[0];
   } catch (error) {
@@ -122,6 +127,9 @@ export async function autoResolveIncident(api, currentStatusCode = null) {
 
     // Send Google Chat notification for API up
     await sendGoogleChatNotification('api_up', api, updatedIncident.rows[0], currentStatusCode);
+
+    // Silence any live phone alarm and send a quiet all-clear.
+    await resolveCriticalAlert(api, updatedIncident.rows[0]);
 
     return incident;
   } catch (error) {

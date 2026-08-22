@@ -413,6 +413,13 @@ sed -i "s/\\\$2b\\\$10\\\$VOgA\\.0dig5CThvoXu3JZteOHp5hVLygMmbF9dOP4rHOvLqHEMLAl
 PGPASSWORD=$DB_PASSWORD psql -h localhost -U $DB_USER -d $DB_NAME -f /tmp/schema_temp.sql > /dev/null 2>&1
 rm /tmp/schema_temp.sql
 
+# Apply migrations. schema.sql already contains everything for a fresh install,
+# but migrations are idempotent and this keeps the fresh-install and upgrade
+# paths identical, so a missing migration can never silently break the app.
+cd "$APP_DIR/backend"
+npm run migrate > /dev/null 2>&1
+cd "$APP_DIR"
+
 echo -e "  ✓ Database initialized"
 
 ################################################################################

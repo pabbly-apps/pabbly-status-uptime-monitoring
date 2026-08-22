@@ -9,6 +9,7 @@ import pool from './config/database.js';
 import { query } from './config/database.js';
 import { startMonitoring } from './services/monitorService.js';
 import { startUptimeCalculations } from './services/uptimeService.js';
+import { startCriticalAlertRepeater } from './services/criticalAlertService.js';
 
 // Load environment variables
 dotenv.config();
@@ -105,14 +106,27 @@ const publicLimiter = rateLimit({
   message: { error: 'Too many requests', message: 'Rate limit exceeded. Please try again later.' },
 });
 
+// Alarm acknowledgement gets its own budget. It shares no allowance with the
+// public status page, so a burst of ack traffic can never lock out the status
+// page — nor can status-page traffic block someone silencing a 3am alarm.
+const ackLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests', message: 'Too many acknowledgement attempts. Please try again later.' },
+});
+
 // Import routes
 import authRoutes from './routes/auth.js';
 import adminRoutes from './routes/admin.js';
 import publicRoutes from './routes/public.js';
+import ackRoutes from './routes/ack.js';
 
 // Use routes (with rate limiters)
 app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/admin', adminLimiter, adminRoutes);
+app.use('/api/public/ack', ackLimiter, ackRoutes);
 app.use('/api/public', publicLimiter, publicRoutes);
 
 // 404 handler
@@ -170,6 +184,9 @@ app.listen(PORT, async () => {
 
   // Start uptime calculation service (calculates summaries hourly)
   startUptimeCalculations();
+
+  // Start critical alarm repeater (re-pushes phone alarms until acknowledged)
+  startCriticalAlertRepeater();
 
   console.log('═══════════════════════════════════════════════════\n');
 });

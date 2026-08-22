@@ -149,6 +149,12 @@ export const testGoogleChat = async () => {
   return response.data;
 };
 
+// Critical Phone Alarm (Home Assistant)
+export const testCriticalAlert = async () => {
+  const response = await api.post('/admin/critical-alert-test');
+  return response.data;
+};
+
 // Email SMTP Settings
 export const getEmailSettings = async () => {
   const response = await api.get('/admin/email-settings');

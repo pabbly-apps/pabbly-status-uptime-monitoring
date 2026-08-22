@@ -30,6 +30,7 @@ import {
   deleteAPIGroup,
   reorderAPIGroups,
   testGoogleChat,
+  testCriticalAlert,
 } from '../controllers/adminController.js';
 import { authenticateToken } from '../middleware/auth.js';
 import upload from '../config/upload.js';
@@ -87,6 +88,9 @@ router.post('/test-webhook-endpoint', testWebhookEndpoint);
 
 // Google Chat Webhook
 router.post('/google-chat-test', testGoogleChat);
+
+// Critical Phone Alarm (Home Assistant)
+router.post('/critical-alert-test', testCriticalAlert);
 
 // Version
 router.get('/version', getVersion);

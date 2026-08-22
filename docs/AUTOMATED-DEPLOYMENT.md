@@ -124,11 +124,10 @@ npm install
 npm run build
 cd ..
 
-# Run migrations
-for file in database/migrations/*.sql; do
-  echo "Running $file..."
-  psql -U status_user -d status_monitor -f "$file" 2>&1 | grep -v 'already exists' || true
-done
+# Run migrations (REQUIRED - the app will not start correctly without this)
+cd backend
+npm run migrate
+cd ..
 
 # Restart backend
 pm2 restart pabbly-status-backend
@@ -401,7 +400,7 @@ For deployment issues:
 ./deploy.sh your-server-ip root
 
 # Deploy (manual)
-ssh root@server-ip 'cd ~/pabbly-status-uptime-monitoring && git pull && cd backend && npm install --production && cd ../frontend && npm install && npm run build && pm2 restart pabbly-status-backend'
+ssh root@server-ip 'cd ~/pabbly-status-uptime-monitoring && git pull && cd backend && npm install --production && npm run migrate && cd ../frontend && npm install && npm run build && pm2 restart pabbly-status-backend'
 
 # Rollback
 ssh root@server-ip 'cd ~/pabbly-status-uptime-monitoring && git reset --hard HEAD~1 && cd frontend && npm run build && pm2 restart pabbly-status-backend'

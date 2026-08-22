@@ -293,6 +293,11 @@ git pull origin main
 # Update backend
 cd backend
 npm install --production
+
+# Apply any new database migrations (REQUIRED - skipping this breaks the
+# admin dashboard when a release adds columns)
+npm run migrate
+
 pm2 restart pabbly-status-backend
 
 # Update frontend

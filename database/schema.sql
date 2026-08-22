@@ -61,6 +61,14 @@ CREATE TABLE IF NOT EXISTS system_settings (
   smtp_from TEXT,
   smtp_recipients TEXT,
 
+  -- Critical Phone Alarm (Home Assistant push gateway)
+  ha_base_url TEXT,
+  ha_token TEXT, -- AES-256-GCM encrypted when ENCRYPTION_KEY is set
+  ha_notify_targets TEXT, -- comma-separated, e.g. mobile_app_pixel_8,mobile_app_iphone_15
+  critical_alert_enabled BOOLEAN DEFAULT FALSE,
+  critical_alert_repeat_seconds INTEGER DEFAULT 30,
+  critical_alert_max_minutes INTEGER DEFAULT 15,
+
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
   -- Ensure only one row exists
@@ -117,6 +125,8 @@ CREATE TABLE IF NOT EXISTS apis (
   failure_threshold INTEGER DEFAULT 2, -- consecutive failed checks before an incident
   is_active BOOLEAN DEFAULT TRUE,
   is_public BOOLEAN DEFAULT TRUE, -- visible on public status page
+  is_critical BOOLEAN DEFAULT FALSE, -- downtime triggers a repeating loud phone alarm
+  alert_targets TEXT, -- comma-separated HA notify targets; NULL/empty = global list
   display_order INTEGER DEFAULT 0, -- for custom ordering on status page
   group_id INTEGER REFERENCES api_groups(id) ON DELETE SET NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -128,6 +138,7 @@ CREATE INDEX IF NOT EXISTS idx_apis_is_active ON apis(is_active);
 CREATE INDEX IF NOT EXISTS idx_apis_name ON apis(name);
 CREATE INDEX IF NOT EXISTS idx_apis_display_order ON apis(display_order);
 CREATE INDEX IF NOT EXISTS idx_apis_is_public ON apis(is_public);
+CREATE INDEX IF NOT EXISTS idx_apis_is_critical ON apis(is_critical);
 CREATE INDEX IF NOT EXISTS idx_apis_group_id ON apis(group_id);
 
 -- Column comments for documentation
@@ -176,6 +187,17 @@ CREATE TABLE IF NOT EXISTS incidents (
   status_code INTEGER, -- HTTP status code that caused the incident (null for timeouts/connection failures)
   started_at TIMESTAMP NOT NULL,
   resolved_at TIMESTAMP,
+
+  -- Critical Phone Alarm state (see migration 010).
+  -- Kept in Postgres, not memory, so a pm2 restart cannot kill a live alarm.
+  acknowledged_at TIMESTAMP,
+  acknowledged_by VARCHAR(255), -- phone-tap | dashboard | auto-resolved | expired
+  ack_token VARCHAR(64), -- authorises the public ack endpoint
+  alarm_next_send_at TIMESTAMP, -- NULL means no alarm is active
+  alarm_attempts INTEGER DEFAULT 0,
+  alarm_stopped_reason VARCHAR(32), -- acknowledged | resolved | expired | disabled | all_silenced | no_targets
+  silenced_devices JSONB DEFAULT '[]'::jsonb, -- devices that muted locally; repeater skips them
+  alerted_devices JSONB DEFAULT '[]'::jsonb, -- devices this alarm actually reached; cleared from exactly these
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -184,6 +206,9 @@ CREATE TABLE IF NOT EXISTS incidents (
 CREATE INDEX IF NOT EXISTS idx_incidents_api_id ON incidents(api_id);
 CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
 CREATE INDEX IF NOT EXISTS idx_incidents_started_at ON incidents(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_incidents_alarm_next_send_at
+  ON incidents(alarm_next_send_at)
+  WHERE alarm_next_send_at IS NOT NULL;
 
 -- Column comments for documentation
 COMMENT ON COLUMN incidents.status IS 'Current incident status: ongoing, identified, monitoring, or resolved';
