@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.9.1] - 2026-08-27
+
+### Fixed
+
+#### Send Test Alarm broke as soon as a device had a label
+
+`testCriticalAlert` split `ha_notify_targets` on commas without handling the optional `:Label` suffix, so a labelled entry was POSTed as a literal target — `/api/services/notify/mobile_app_ravi:Ravi (Pixel)` — and Home Assistant returned HTTP 400. It now uses the same `parseTargetSpec` helper as the rest of the service. Covered by a test asserting no `:` ever reaches a notify URL.
+
+**Impact:** anyone who added a friendly label would have hit this the first time they pressed Send Test Alarm.
+
+### Changed
+
+#### iOS alarm sound fixed to `alarm.caf`
+
+The payload previously sent `sound: "default"` — iOS's tri-tone, roughly one second, which reads as a message rather than an alarm. Now hardcoded to Apple's system alarm sound.
+
+Briefly built as a configurable setting, then deliberately removed: it applies to iPhones only, and a knob that silently does nothing on Android reads as a bug. Android is unaffected either way — it plays the device's own alarm tone via the `alarm_stream_max` channel.
+
+Recipients must import iOS system sounds once in the Home Assistant app (Settings → Companion App → Notifications → Sounds) and restart the phone. **A device without the file falls back to the iOS default rather than going silent**, so a missed import degrades the sound but never the alarm.
+
+#### Devices are managed in a list, not a comma-separated text field
+
+The Phone Alarm tab now shows each phone as a row with its display name, notify service, and its own **Test** and **Remove** buttons. **+ Add Device** opens a modal with **Save** and **Save & Test**.
+
+**Test rings one phone only.** Previously the single Send Test Alarm button woke every configured device, so adding a colleague meant disturbing everyone else just to check their phone worked. `testCriticalAlert(target)` now accepts an optional device, validated against the configured list — an unknown target is refused outright rather than silently ringing nobody.
+
+Adding and removing a device saves immediately rather than waiting for **Update Alarm Settings**. That is deliberate: Test rings whatever the *server* has stored, so the on-screen list and the saved list must never diverge. A device that isn't saved yet has its Test button disabled.
+
+**Files Changed:**
+- `backend/src/services/criticalAlertService.js` — `parseTargetSpec` in `testCriticalAlert` (the fix); optional single-device target; `IOS_ALARM_SOUND` constant.
+- `backend/src/controllers/adminController.js` — test endpoint accepts an optional `target`.
+- `frontend/src/pages/Settings.jsx` — devices list, Add Device modal, per-device Test.
+- `frontend/src/services/adminService.js` — `testCriticalAlert(target)`.
+- `database/schema.sql` — removed the short-lived `critical_alert_sound` column.
+- `backend/package.json` → 1.9.1, `frontend/package.json` → 1.3.0
+
+**Migration:** none. No schema change — deploy is `git pull` → `npm install` → `npm run build` → `pm2 restart`.
+
+---
+
 ## [1.9.0] - 2026-08-22
 
 ### Added

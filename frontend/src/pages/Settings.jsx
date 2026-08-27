@@ -17,6 +17,12 @@ export default function Settings() {
   const [testingWebhook, setTestingWebhook] = useState(false);
   const [testingGoogleChat, setTestingGoogleChat] = useState(false);
   const [testingCriticalAlert, setTestingCriticalAlert] = useState(false);
+  const [savedTargets, setSavedTargets] = useState([]);
+  const [testingDevice, setTestingDevice] = useState('');
+  const [showDeviceModal, setShowDeviceModal] = useState(false);
+  const [newDeviceService, setNewDeviceService] = useState('');
+  const [newDeviceLabel, setNewDeviceLabel] = useState('');
+  const [addingDevice, setAddingDevice] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [version, setVersion] = useState('');
   const [emailInputValue, setEmailInputValue] = useState('');
@@ -113,6 +119,13 @@ export default function Settings() {
           critical_alert_repeat_seconds: settingsRes.settings.critical_alert_repeat_seconds ?? 30,
           critical_alert_max_minutes: settingsRes.settings.critical_alert_max_minutes ?? 15,
         });
+
+        // Remember which devices exist server-side, so unsaved rows can't be tested.
+        setSavedTargets(
+          (settingsRes.settings.ha_notify_targets || '')
+            .split(',').map((e) => e.trim()).filter(Boolean)
+            .map((e) => (e.indexOf(':') === -1 ? e : e.slice(0, e.indexOf(':')).trim()))
+        );
 
         // Initialize domain tags from settings
         if (domains.trim() === '*') {
@@ -267,6 +280,86 @@ export default function Settings() {
       toast.error(error.response?.data?.message || 'Failed to update settings');
     } finally {
       setSaving(false);
+    }
+  };
+
+  // Alarm device handlers. Devices live in systemSettings.ha_notify_targets as
+  // a comma-separated string; these keep the chip UI and that string in sync.
+  const deviceList = () =>
+    (systemSettings.ha_notify_targets || '')
+      .split(',')
+      .map((e) => e.trim())
+      .filter(Boolean)
+      .map((entry) => {
+        const idx = entry.indexOf(':');
+        return idx === -1
+          ? { raw: entry, target: entry, label: entry }
+          : { raw: entry, target: entry.slice(0, idx).trim(), label: entry.slice(idx + 1).trim() || entry.slice(0, idx).trim() };
+      });
+
+  // Devices persist as soon as they're added or removed, rather than waiting
+  // for "Update Alarm Settings". That keeps the saved list and the on-screen
+  // list identical, which is what makes the per-device Test button safe to use.
+  const persistDevices = async (entries) => {
+    const next = { ...systemSettings, ha_notify_targets: entries.map((d) => d.raw).join(', ') };
+    setSystemSettings(next);
+    await updateSettings(next);
+    setSavedTargets(entries.map((d) => d.target));
+  };
+
+  // Ring one phone. Uses the saved device list, so the button is disabled
+  // until the device actually exists server-side.
+  const handleTestDevice = async (device) => {
+    setTestingDevice(device.target);
+    try {
+      const response = await testCriticalAlert(device.target);
+      toast.success(response.message || `Test alarm sent to ${device.label}`);
+    } catch (error) {
+      console.error('Test device error:', error);
+      toast.error(error.response?.data?.message || `Failed to ring ${device.label}`);
+    } finally {
+      setTestingDevice('');
+    }
+  };
+
+  const handleAddDevice = async (alsoTest) => {
+    const service = newDeviceService.trim().replace(/^notify\./, '');
+    if (!service) {
+      toast.error('Enter the notify service name, e.g. mobile_app_ravi_iphone');
+      return;
+    }
+    if (deviceList().some((d) => d.target === service)) {
+      toast.error(`${service} is already in the list`);
+      return;
+    }
+
+    const label = newDeviceLabel.trim();
+    const device = { raw: label ? `${service}:${label}` : service, target: service, label: label || service };
+
+    setAddingDevice(true);
+    try {
+      await persistDevices([...deviceList(), device]);
+      toast.success(`${device.label} added`);
+      setShowDeviceModal(false);
+      setNewDeviceService('');
+      setNewDeviceLabel('');
+      if (alsoTest) await handleTestDevice(device);
+    } catch (error) {
+      console.error('Add device error:', error);
+      toast.error(error.response?.data?.message || 'Failed to add device');
+    } finally {
+      setAddingDevice(false);
+    }
+  };
+
+  const handleRemoveDevice = async (device) => {
+    if (!window.confirm(`Remove ${device.label}? It will stop receiving critical alarms.`)) return;
+    try {
+      await persistDevices(deviceList().filter((d) => d.target !== device.target));
+      toast.success(`${device.label} removed`);
+    } catch (error) {
+      console.error('Remove device error:', error);
+      toast.error(error.response?.data?.message || 'Failed to remove device');
     }
   };
 
@@ -1315,23 +1408,60 @@ export default function Settings() {
               </div>
 
               <div>
-                <label htmlFor="ha_notify_targets" className="block text-sm font-medium text-gray-700 mb-1">
-                  Device Targets
-                </label>
-                <input
-                  type="text"
-                  id="ha_notify_targets"
-                  name="ha_notify_targets"
-                  value={systemSettings.ha_notify_targets}
-                  onChange={handleSystemChange}
-                  placeholder="mobile_app_pixel_8:Ravi (Pixel), mobile_app_iphone_15:Priya (iPhone)"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                />
+                <div className="flex items-center justify-between mb-2">
+                  <span className="block text-sm font-medium text-gray-700">
+                    Devices ({deviceList().length})
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowDeviceModal(true)}
+                    className="px-3 py-1.5 text-sm font-medium text-blue-600 border border-blue-200 rounded-md hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-blue-500"
+                  >
+                    + Add Device
+                  </button>
+                </div>
+
+                {deviceList().length === 0 ? (
+                  <div className="px-4 py-6 border border-dashed border-gray-300 rounded-md text-center">
+                    <p className="text-sm text-gray-500">No phones added yet.</p>
+                    <p className="text-xs text-gray-400 mt-1">
+                      Nothing will ring until at least one device is added.
+                    </p>
+                  </div>
+                ) : (
+                  <ul className="border border-gray-200 rounded-md divide-y divide-gray-200">
+                    {deviceList().map((device) => (
+                      <li key={device.target} className="flex items-center justify-between gap-3 px-3 py-2.5">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-gray-900 truncate">{device.label}</p>
+                          <p className="text-xs text-gray-500 truncate font-mono">{device.target}</p>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleTestDevice(device)}
+                            disabled={testingDevice === device.target || !savedTargets.includes(device.target)}
+                            title={savedTargets.includes(device.target) ? `Ring ${device.label} only` : 'Save settings first'}
+                            className="px-3 py-1 text-xs font-medium text-gray-700 bg-white border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50"
+                          >
+                            {testingDevice === device.target ? 'Ringing…' : 'Test'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveDevice(device)}
+                            className="px-3 py-1 text-xs font-medium text-red-600 border border-red-200 rounded hover:bg-red-50"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
                 <p className="mt-1 text-xs text-gray-500">
-                  Comma-separated Home Assistant notify services, one per phone. Add
-                  <code className="bg-gray-100 px-1 rounded">:Name</code> after a service to show a
-                  friendly label when picking who an API should wake &mdash; e.g.
-                  <code className="bg-gray-100 px-1 rounded">mobile_app_pixel_8:Ravi (Pixel)</code>.
+                  Each phone that should be woken. <strong>Test</strong> rings only that device, so adding a
+                  colleague never wakes the rest of the team. Adding or removing saves immediately.
                 </p>
               </div>
 
@@ -1422,6 +1552,109 @@ export default function Settings() {
                 </button>
               </div>
             </form>
+          </div>
+          )}
+
+          {/* Add Device modal */}
+          {showDeviceModal && (
+          <div className="fixed inset-0 z-50 overflow-y-auto">
+            <div className="flex min-h-screen items-center justify-center p-4">
+              <div
+                className="fixed inset-0 bg-black bg-opacity-50"
+                onClick={() => !addingDevice && setShowDeviceModal(false)}
+              ></div>
+
+              <div className="relative bg-white rounded-lg shadow-xl max-w-lg w-full p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold text-gray-900">Add Device</h3>
+                  <button
+                    type="button"
+                    onClick={() => setShowDeviceModal(false)}
+                    disabled={addingDevice}
+                    className="text-gray-400 hover:text-gray-500 disabled:opacity-50"
+                  >
+                    <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+
+                <div className="space-y-4">
+                  <div>
+                    <label htmlFor="new_device_service" className="block text-sm font-medium text-gray-700 mb-1">
+                      Notify Service *
+                    </label>
+                    <input
+                      type="text"
+                      id="new_device_service"
+                      value={newDeviceService}
+                      onChange={(e) => setNewDeviceService(e.target.value)}
+                      placeholder="mobile_app_ravi_iphone"
+                      autoFocus
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm font-mono text-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                    />
+                    <p className="mt-1 text-xs text-gray-500">
+                      In Home Assistant: <strong>Developer tools &rarr; Actions</strong>, search
+                      {' '}<code className="bg-gray-100 px-1 rounded">notify</code>. Enter the name without the
+                      {' '}<code className="bg-gray-100 px-1 rounded">notify.</code> prefix. The phone must have
+                      signed into the HA app first, or it won&apos;t appear there.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label htmlFor="new_device_label" className="block text-sm font-medium text-gray-700 mb-1">
+                      Display Name
+                    </label>
+                    <input
+                      type="text"
+                      id="new_device_label"
+                      value={newDeviceLabel}
+                      onChange={(e) => setNewDeviceLabel(e.target.value)}
+                      placeholder="Ravi (iPhone)"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm text-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                    />
+                    <p className="mt-1 text-xs text-gray-500">
+                      Optional. Shown when choosing which phones an API should wake. Defaults to the service name.
+                    </p>
+                  </div>
+
+                  <div className="p-3 bg-blue-50 border border-blue-200 rounded-md">
+                    <p className="text-xs text-blue-700">
+                      <strong>Save &amp; Test</strong> rings this phone only &mdash; nobody else is disturbed. On
+                      iPhone the alarm needs <strong>Critical Alerts</strong> allowed in the HA app, otherwise it
+                      stays silent under Do Not Disturb.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row justify-end gap-3 pt-5 mt-5 border-t">
+                  <button
+                    type="button"
+                    onClick={() => setShowDeviceModal(false)}
+                    disabled={addingDevice}
+                    className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAddDevice(false)}
+                    disabled={addingDevice}
+                    className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    {addingDevice ? 'Saving...' : 'Save'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAddDevice(true)}
+                    disabled={addingDevice}
+                    className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    {addingDevice ? 'Saving...' : 'Save & Test'}
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
           )}
 

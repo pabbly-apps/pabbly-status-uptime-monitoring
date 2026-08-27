@@ -34,6 +34,20 @@ const TICK_INTERVAL_MS = 5000;
 // Per-request timeout when talking to Home Assistant.
 const HA_TIMEOUT_MS = 10000;
 
+// iOS notification sound. Deliberately NOT the "default" tri-tone, which is
+// about a second long and reads as a message, not an alarm. alarm.caf is
+// Apple's system alarm sound and runs long enough to wake someone.
+//
+// Recipients must import iOS system sounds once in the Home Assistant app
+// (Settings -> Companion App -> Notifications -> Sounds) and restart the phone.
+// A device that doesn't have it falls back to the iOS default rather than
+// going silent, so a missed import degrades the sound but never the alarm.
+//
+// Not a setting: it applies to iPhones only, and a knob that silently does
+// nothing on Android reads as a bug. Android ignores this and plays the
+// device's own alarm tone via the alarm_stream_max channel.
+const IOS_ALARM_SOUND = 'alarm.caf';
+
 let repeaterHandle = null;
 
 /**
@@ -154,7 +168,7 @@ function buildAlarmPayload(api, incident, ackUrl, attempt, timezone) {
       // Plays at full volume through the silent switch and Focus/DND.
       // Requires the recipient to have granted Critical Alerts permission.
       push: {
-        sound: { name: 'default', critical: 1, volume: 1.0 },
+        sound: { name: IOS_ALARM_SOUND, critical: 1, volume: 1.0 },
       },
 
       // --- Android: alarm stream at max volume ---
@@ -209,7 +223,7 @@ function buildTestPayload(dismissUrl, timezone) {
     title: '🔔 Test Alarm — Pabbly Status Monitor',
     message: `This is what a critical alert sounds like. Sent ${formatWithTimezone(new Date(), timezone)}. Tap to dismiss.`,
     data: {
-      push: { sound: { name: 'default', critical: 1, volume: 1.0 } },
+      push: { sound: { name: IOS_ALARM_SOUND, critical: 1, volume: 1.0 } },
       channel: 'alarm_stream_max',
       importance: 'high',
       priority: 'high',
@@ -744,7 +758,7 @@ export function stopCriticalAlertRepeater() {
 /**
  * Send a test alarm (synchronous — returns a result for the admin UI).
  */
-export async function testCriticalAlert() {
+export async function testCriticalAlert(onlyTarget = null) {
   const startTime = Date.now();
 
   try {
@@ -773,14 +787,26 @@ export async function testCriticalAlert() {
       };
     }
 
-    const targets = (row.ha_notify_targets || '')
-      .split(',')
-      .map((t) => t.trim())
-      .filter(Boolean);
+    // parseTargetSpec, not a raw split: entries may carry a ":Label" suffix and
+    // sending that whole string as a target would fail.
+    const devices = parseTargetSpec(row.ha_notify_targets);
+    const targets = devices.map((d) => d.target);
 
     if (!targets.length) {
       return { success: false, message: 'No notification targets configured (e.g. mobile_app_your_phone)' };
     }
+
+    // Default to every device, but allow testing one. Adding a colleague
+    // shouldn't mean waking everyone else just to check their phone works.
+    let sendTo = targets;
+    if (onlyTarget) {
+      if (!targets.includes(onlyTarget)) {
+        return { success: false, message: `Unknown device: ${onlyTarget}. Save your device list first.` };
+      }
+      sendTo = [onlyTarget];
+    }
+
+    const labelFor = (t) => devices.find((d) => d.target === t)?.label || t;
 
     const cfg = {
       baseUrl: row.ha_base_url.trim().replace(/\/+$/, ''),
@@ -794,7 +820,7 @@ export async function testCriticalAlert() {
     const payload = buildTestPayload(dismissUrl, cfg.timezone);
 
     const results = await Promise.all(
-      cfg.targets.map((target) => postToHomeAssistant(cfg, target, payload))
+      sendTo.map((target) => postToHomeAssistant(cfg, target, payload))
     );
 
     const responseTime = Date.now() - startTime;
@@ -803,7 +829,9 @@ export async function testCriticalAlert() {
     if (!failed.length) {
       return {
         success: true,
-        message: `Test alarm sent to ${results.length} device target(s) in ${responseTime}ms`,
+        message: sendTo.length === 1
+          ? `Test alarm sent to ${labelFor(sendTo[0])} in ${responseTime}ms`
+          : `Test alarm sent to all ${results.length} devices in ${responseTime}ms`,
         responseTime,
       };
     }

@@ -150,8 +150,8 @@ export const testGoogleChat = async () => {
 };
 
 // Critical Phone Alarm (Home Assistant)
-export const testCriticalAlert = async () => {
-  const response = await api.post('/admin/critical-alert-test');
+export const testCriticalAlert = async (target = null) => {
+  const response = await api.post('/admin/critical-alert-test', target ? { target } : {});
   return response.data;
 };
 

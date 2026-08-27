@@ -1501,7 +1501,10 @@ export const testGoogleChat = async (req, res) => {
 export const testCriticalAlert = async (req, res) => {
   try {
     const { testCriticalAlert: runTest } = await import('../services/criticalAlertService.js');
-    const result = await runTest();
+    // Optional: ring one device instead of everyone. Adding a colleague
+    // shouldn't wake the rest of the team just to verify their phone.
+    const { target } = req.body || {};
+    const result = await runTest(typeof target === 'string' && target.trim() ? target.trim() : null);
 
     if (result.success) {
       res.json({
