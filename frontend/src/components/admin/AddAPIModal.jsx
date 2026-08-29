@@ -111,6 +111,14 @@ export default function AddAPIModal({ isOpen, onClose, onSuccess, editingAPI }) 
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+
+    // A Critical API must name its devices. Blank would otherwise wake every
+    // phone, which is the cross-team noise per-API routing exists to prevent.
+    if (formData.is_critical && (formData.alert_targets || '').trim() === '') {
+      toast.error('Choose at least one phone to ring for this Critical API, or untick Critical.');
+      return;
+    }
+
     setLoading(true);
 
     try {
@@ -343,7 +351,7 @@ export default function AddAPIModal({ isOpen, onClose, onSuccess, editingAPI }) 
             {/* Which phones this API should ring */}
             {formData.is_critical && (
               <div className="ml-6 p-3 bg-gray-50 border border-gray-200 rounded-md">
-                <p className="text-sm font-medium text-gray-900 mb-2">Ring which phones?</p>
+                <p className="text-sm font-medium text-gray-900 mb-2">Ring which phones? *</p>
 
                 {devices.length === 0 ? (
                   <p className="text-xs text-gray-500">
@@ -371,7 +379,7 @@ export default function AddAPIModal({ isOpen, onClose, onSuccess, editingAPI }) 
                     </div>
                     <p className="mt-2 text-xs text-gray-500">
                       {(formData.alert_targets || '').trim() === ''
-                        ? 'Nothing selected — every phone will ring. Tick specific people to route this API to them only.'
+                        ? 'Pick at least one person — a Critical API cannot be saved without one.'
                         : 'Only the people ticked above will be woken for this API.'}
                     </p>
                   </>

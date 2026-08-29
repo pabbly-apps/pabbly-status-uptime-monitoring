@@ -58,6 +58,20 @@ async function validateAlertTargets(value) {
   return null;
 }
 
+// A Critical API must name at least one device.
+//
+// Blank used to mean "wake everyone", which contradicts the no-fallback rule
+// applied everywhere else: routing is always explicit, so an outage can never
+// wake a team it has nothing to do with. Silence and "everyone" are both wrong
+// defaults, so neither is allowed - the admin has to say who.
+function validateCriticalRouting(isCritical, alertTargets) {
+  if (!isCritical) return null;
+  if (parseTargetSpec(alertTargets).length === 0) {
+    return 'A Critical API must have at least one device selected. Choose who should be woken, or untick Critical.';
+  }
+  return null;
+}
+
 function validationError(res, message) {
   return res.status(400).json({ error: 'Validation error', message });
 }
@@ -207,6 +221,7 @@ export const createAPI = async (req, res) => {
     if ((err = validateNumber(failure_threshold, 'Failure threshold', 1, 10))) return validationError(res, err);
     if (alert_targets !== undefined && alert_targets !== null && (err = validateString(alert_targets, 'Alert targets', 'alert_targets'))) return validationError(res, err);
     if ((err = await validateAlertTargets(alert_targets))) return validationError(res, err);
+    if ((err = validateCriticalRouting(is_critical, alert_targets))) return validationError(res, err);
 
     // Validate URL format
     try {
@@ -277,7 +292,7 @@ export const updateAPI = async (req, res) => {
     } = req.body;
 
     // Check if API exists
-    const checkResult = await query('SELECT id FROM apis WHERE id = $1', [id]);
+    const checkResult = await query('SELECT id, is_critical, alert_targets FROM apis WHERE id = $1', [id]);
     if (checkResult.rows.length === 0) {
       return res.status(404).json({
         error: 'Not found',
@@ -295,6 +310,14 @@ export const updateAPI = async (req, res) => {
     if (failure_threshold !== undefined && (err = validateNumber(failure_threshold, 'Failure threshold', 1, 10))) return validationError(res, err);
     if (alert_targets !== undefined && alert_targets !== null && (err = validateString(alert_targets, 'Alert targets', 'alert_targets'))) return validationError(res, err);
     if (alert_targets !== undefined && (err = await validateAlertTargets(alert_targets))) return validationError(res, err);
+
+    // Check the state the API will END UP in - a partial update might flip
+    // is_critical on without touching alert_targets, or clear the targets of
+    // an API that is already critical.
+    const existing = checkResult.rows[0];
+    const willBeCritical = is_critical !== undefined ? is_critical : existing.is_critical;
+    const willHaveTargets = alert_targets !== undefined ? alert_targets : existing.alert_targets;
+    if ((err = validateCriticalRouting(willBeCritical, willHaveTargets))) return validationError(res, err);
 
     // Build update query dynamically
     const updates = [];

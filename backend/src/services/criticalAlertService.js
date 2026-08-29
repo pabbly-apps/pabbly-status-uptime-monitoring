@@ -35,18 +35,21 @@ const TICK_INTERVAL_MS = 5000;
 const HA_TIMEOUT_MS = 10000;
 
 // iOS notification sound. Deliberately NOT the "default" tri-tone, which is
-// about a second long and reads as a message, not an alarm. alarm.caf is
-// Apple's system alarm sound and runs long enough to wake someone.
+// about a second long and reads as a message, not an alarm. Apple's own system
+// sounds are no better - they are UI blips of 1-3 seconds - so this is a custom
+// 29 second alarm (iOS caps notification sounds at 30s).
 //
-// Recipients must import iOS system sounds once in the Home Assistant app
-// (Settings -> Companion App -> Notifications -> Sounds) and restart the phone.
-// A device that doesn't have it falls back to the iOS default rather than
-// going silent, so a missed import degrades the sound but never the alarm.
+// Each recipient imports the file once in the Home Assistant app
+// (Settings -> Companion App -> Notifications -> Sounds). A device that doesn't
+// have it falls back to the iOS default rather than going silent, so a missed
+// import degrades the sound but never the alarm.
 //
 // Not a setting: it applies to iPhones only, and a knob that silently does
 // nothing on Android reads as a bug. Android ignores this and plays the
 // device's own alarm tone via the alarm_stream_max channel.
-const IOS_ALARM_SOUND = 'alarm.caf';
+//
+// See docs/CRITICAL-ALARM-SETUP.md for the file and the import steps.
+const IOS_ALARM_SOUND = 'biohazard-alarm.wav';
 
 let repeaterHandle = null;
 
@@ -113,24 +116,55 @@ async function getConfig() {
 /**
  * Work out which phones a given API should ring.
  *
- * An API's own alert_targets wins; NULL/empty falls back to the global list,
- * which is what every API did before per-API routing existed.
+ * Routing is always explicit: a Critical API must name its devices, enforced at
+ * the API layer. These phones belong to different project teams, and waking the
+ * wrong team at 3am is its own incident.
  *
- * The result is always intersected with the currently-configured devices, so a
- * phone removed from the global list stops ringing everywhere without having to
- * edit every API.
- *
- * Deliberately NO fallback to "everyone": these phones belong to different
- * project teams, and waking the wrong team at 3am is its own incident. If the
- * routing resolves to nobody this returns an empty list, and the caller refuses
- * to arm the alarm and logs an error. Google Chat and email still fire, so the
- * outage is never invisible — and updateSettings warns before an admin can
- * strand an API this way.
+ * The result is intersected with the currently-configured devices, so a phone
+ * removed from the global list stops ringing everywhere without having to edit
+ * every API. If that intersection is empty — every routed device has since been
+ * removed — this returns nothing, and the caller refuses to arm rather than
+ * falling back to "everyone". Google Chat and email still fire, so the outage
+ * is never invisible, and updateSettings warns before an admin can strand an
+ * API that way.
  */
 function resolveTargets(cfg, apiAlertTargets) {
   const raw = parseTargetSpec(apiAlertTargets).map((d) => d.target);
-  if (!raw.length) return cfg.targets;
+
+  // No fallback to "everyone". The API layer refuses to save a Critical API
+  // without devices, so this is only reachable if a row is edited directly in
+  // the database. Ringing nobody is the safer failure: the caller logs an error
+  // and Google Chat still fires, whereas waking an unrelated team teaches people
+  // to mute the app.
+  if (!raw.length) return [];
+
   return raw.filter((t) => cfg.targets.includes(t));
+}
+
+/**
+ * Flag, at startup, any Critical API with no devices selected.
+ *
+ * The API layer won't let this be saved, so it means someone edited the
+ * database directly. Such an API alarms nobody, which is silent and worth
+ * shouting about.
+ */
+async function warnOnUnroutedCriticalApis() {
+  try {
+    const result = await query(
+      `SELECT name FROM apis
+       WHERE is_critical = TRUE
+         AND (alert_targets IS NULL OR btrim(alert_targets) = '')
+       ORDER BY name`
+    );
+    if (result.rows.length) {
+      console.error(
+        `❌ ${result.rows.length} Critical API(s) have no devices selected and will alarm NOBODY: ` +
+        `${result.rows.map((r) => r.name).join(', ')}. Edit each one and choose who should be woken.`
+      );
+    }
+  } catch (error) {
+    console.error('Failed to check critical API routing:', error.message);
+  }
 }
 
 /**
@@ -746,6 +780,8 @@ export function startCriticalAlertRepeater() {
   if (typeof repeaterHandle.unref === 'function') repeaterHandle.unref();
 
   console.log(`📢 Critical alarm repeater started (tick every ${TICK_INTERVAL_MS / 1000}s)`);
+
+  warnOnUnroutedCriticalApis();
 }
 
 export function stopCriticalAlertRepeater() {

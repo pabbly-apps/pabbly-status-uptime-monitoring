@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.9.2] - 2026-08-29
+
+### Changed
+
+#### A Critical API must now name at least one device
+
+Previously, leaving every phone unticked meant "wake everyone". That contradicted the rule applied everywhere else in this feature: routing is explicit, so an outage never wakes a team it has nothing to do with. Silence and "everyone" are both wrong defaults, so neither is allowed — saving a Critical API without devices is now a validation error in both the API and the Add/Edit API dialog.
+
+`resolveTargets` no longer falls back to the global list either. Blank now resolves to nobody, the incident records `no_targets`, and the alarm refuses to arm. Google Chat and email still fire, so the outage is never invisible. A startup check logs any Critical API found with no devices — only reachable by editing the database directly.
+
+Partial updates are covered: flipping `is_critical` on without supplying devices is rejected, and so is clearing the devices of an API that is already Critical — a request that never mentions `is_critical` at all.
+
+Safe to change with no data migration because nothing had been marked Critical yet.
+
+#### iOS alarm sound is now a custom 29-second alarm
+
+`alarm.caf` didn't help, and Apple's other system sounds are UI blips of 1–3 seconds — none of them read as an alarm. `IOS_ALARM_SOUND` is now `biohazard-alarm.wav`, a 29 second file (iOS caps notification sounds at 30s) that each recipient imports once in the Home Assistant app.
+
+A device without the file falls back to the iOS default rather than going silent, so a missed import degrades the sound but never the alarm. Android is unaffected throughout — it plays the device's own alarm tone via the `alarm_stream_max` channel and ignores the iOS sound field entirely.
+
+### Added
+
+#### Setup documentation
+
+`docs/CRITICAL-ALARM-SETUP.md` — split into steps for team members (install, sign in, allow **Critical Alerts** on iPhone, import the sound) and a separate admin guide (creating logins, finding device names, routing APIs, removing people).
+
+The two steps people skip are called out deliberately: the **Critical Alerts** prompt on iPhone, without which the alarm is silent under Do Not Disturb, and closing/reopening the app after importing the sound.
+
+**Files Changed:**
+- `backend/src/services/criticalAlertService.js` — no "everyone" fallback; startup check; sound constant.
+- `backend/src/controllers/adminController.js` — `validateCriticalRouting` on create and update, evaluated against the API's *resulting* state.
+- `frontend/src/components/admin/AddAPIModal.jsx` — blocks saving a Critical API with no devices.
+- `docs/CRITICAL-ALARM-SETUP.md` — new.
+- `backend/package.json` → 1.9.2, `frontend/package.json` → 1.3.1
+
+**Migration:** none. Deploy is `git pull` → `npm install` → `npm run build` (frontend) → `pm2 restart`.
+
+**Known issue (still unfixed):** `backend/src/config/migrate.js` compares `import.meta.url` against `process.argv[1]`, which never match on Windows, so `npm run migrate` is a silent no-op there. This had left the local dev database without migrations 007 and 009; both have now been applied by hand. Linux servers are unaffected.
+
+---
+
 ## [1.9.1] - 2026-08-27
 
 ### Fixed
