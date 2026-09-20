@@ -23,7 +23,10 @@ function createMonitoringAgent() {
 
     // Disable undici's built-in timeouts — let the per-API AbortController
     // (which uses each API's timeout_duration from the dashboard) control all timeouts
-    connect: { timeout: 120000 },
+    // Force IPv4: Node dual-stack connection racing (autoSelectFamily) against
+    // Cloudflare produced ~15s TLS handshake drops. Measured 2026-09-20:
+    // default 51/150 failures, forced IPv4 0/150. See CHANGELOG v1.9.3.
+    connect: { timeout: 120000, autoSelectFamily: false, family: 4 },
     headersTimeout: 120000,
     bodyTimeout: 120000,
   });
