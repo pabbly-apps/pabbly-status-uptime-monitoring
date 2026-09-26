@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.9.3] - 2026-09-26
+
+### Fixed
+
+#### Critical routing was silently erased by any later edit
+
+Ticking **Critical**, choosing phones and saving worked, but reopening the API showed Critical unticked with no phones selected — and saving again wrote those blanks back, quietly un-marking the API and erasing its routing. No error at any point; the alarm simply stopped existing.
+
+Three read endpoints use explicit column lists that were never updated when `is_critical` and `alert_targets` were added in v1.9.0. The write path persisted them; the read path never returned them, so `AddAPIModal` fell back to `is_critical ?? false` and `alert_targets || ''` and sent those defaults on the next save.
+
+- `getAllAPIs` — what the dashboard loads into the edit modal
+- `getAPIById`
+- APIs by group — also still missing `failure_threshold`, wrong since v1.8.0 and causing the same silent reset for that field
+
+`SELECT *` callers (`monitorService`, the update-path existence check) were already correct.
+
+**Impact:** any Critical API edited for an unrelated reason — a renamed title, a changed timeout — would have stopped alarming, with nothing to indicate it. Worth re-checking any API marked Critical before this release.
+
+**Files Changed:**
+- `backend/src/controllers/adminController.js` — added the missing columns to all three SELECTs.
+- `backend/package.json` → 1.9.3
+
+**Migration:** none. No schema or frontend change — `git pull` → `npm install --production` → `pm2 restart`.
+
+**Test:** `readback-test` covers the round trip, including the data-loss case: hydrate a form from `getAllAPIs`, make an unrelated edit, save, and assert the API is still Critical with its routing intact. That assertion never existed, which is why this shipped.
+
+---
+
 ## [1.9.2] - 2026-08-29
 
 ### Changed

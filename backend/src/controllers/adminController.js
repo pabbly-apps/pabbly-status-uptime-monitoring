@@ -114,6 +114,7 @@ export const getAllAPIs = async (req, res) => {
       SELECT
         a.id, a.name, a.url, a.monitoring_interval, a.expected_status_code,
         a.timeout_duration, a.failure_threshold, a.is_active, a.is_public, a.display_order,
+        a.is_critical, a.alert_targets,
         a.group_id, a.created_at, a.updated_at,
         g.name as group_name,
         g.display_order as group_order,
@@ -163,7 +164,7 @@ export const getAPIById = async (req, res) => {
     const { id } = req.params;
 
     const result = await query(
-      `SELECT id, name, url, monitoring_interval, expected_status_code, timeout_duration, failure_threshold, is_active, is_public, display_order, group_id, created_at, updated_at FROM apis WHERE id = $1`,
+      `SELECT id, name, url, monitoring_interval, expected_status_code, timeout_duration, failure_threshold, is_active, is_public, is_critical, alert_targets, display_order, group_id, created_at, updated_at FROM apis WHERE id = $1`,
       [id]
     );
 
@@ -1640,7 +1641,7 @@ export const getAPIGroup = async (req, res) => {
 
     // Get APIs in this group
     const apisResult = await query(
-      'SELECT id, name, url, monitoring_interval, expected_status_code, timeout_duration, is_active, is_public, display_order, group_id, created_at, updated_at FROM apis WHERE group_id = $1 ORDER BY display_order ASC, id ASC',
+      'SELECT id, name, url, monitoring_interval, expected_status_code, timeout_duration, failure_threshold, is_active, is_public, is_critical, alert_targets, display_order, group_id, created_at, updated_at FROM apis WHERE group_id = $1 ORDER BY display_order ASC, id ASC',
       [id]
     );
 
